@@ -6,6 +6,7 @@ mod info;
 mod login;
 mod logout;
 mod notetypes;
+mod review;
 mod search;
 mod show;
 mod sync;
@@ -67,6 +68,8 @@ enum Command {
     Logout,
     /// Sync the collection and media with AnkiWeb.
     Sync(sync::SyncArgs),
+    /// Review due cards in the terminal.
+    Review(review::ReviewArgs),
 }
 
 /// Everything a command needs besides its own arguments.
@@ -103,6 +106,7 @@ pub fn run() -> ExitCode {
             Command::Login(args) => login::run(&ctx, args),
             Command::Logout => logout::run(&ctx),
             Command::Sync(args) => sync::run(&ctx, args),
+            Command::Review(args) => review::run(&ctx, args),
         }
     });
     match result {

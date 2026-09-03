@@ -25,6 +25,8 @@ yaac edit NOTE_ID Back="better answer"     # unmentioned fields keep their conte
 yaac tag add "todo review" NOTE_ID...      # or: yaac tag remove TAGS NOTE_ID...
 yaac delete NOTE_ID... [--yes]             # lists the notes, then asks; --yes when piped
 
+yaac review [DECK]                         # review in the terminal; picks a deck when none is given
+
 yaac login [USERNAME]                      # asks for the password; stores AnkiWeb's session key
 yaac sync                                  # collection and media; asks if a full sync is needed
 yaac sync --full-upload | --full-download  # pick a side explicitly; --yes skips the question
@@ -38,6 +40,22 @@ Field values are stored as HTML, exactly as given. `add` runs Anki's own checks:
 Ids for `show`, `tag`, and `delete` can be passed as arguments or read from stdin with `-`, so `yaac search ... --ids | yaac tag add later -` works.
 
 After any change yaac takes a backup into the profile's `backups/` folder, following the collection's own backup settings, the same way the desktop does on exit.
+
+### Review
+
+`yaac review` opens a deck picker with today's counts, or goes straight into a deck named on the command line. The screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
+
+| Key          | Action                                                                  |
+| ------------ | ----------------------------------------------------------------------- |
+| space, enter | show the answer                                                         |
+| 1 2 3 4      | Again, Hard, Good, Easy, labelled with the interval Anki would schedule |
+| u            | undo the last answer or change                                          |
+| s            | suspend the card                                                        |
+| b            | bury the card until tomorrow                                            |
+| f            | cycle the card's flag colour                                            |
+| q, esc       | quit; the session summary is printed afterwards                         |
+
+Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text: formatting, lists, and cloze deletions are kept, images and audio appear as labels until image support lands.
 
 ### Sync
 
@@ -57,8 +75,15 @@ Notes are objects with `id`, `guid`, `notetype`, `deck`, `tags`, `modified`, `so
 
 ```json
 [
-  {"fields": {"Front": "el gato/la gata", "Back": "cat"}, "tags": ["vocab"]},
-  {"notetype": "Cloze", "deck": "Spanish", "fields": {"Text": "{{c1::el gato}} means cat"}}
+  {
+    "fields": { "Front": "el gato/la gata", "Back": "cat" },
+    "tags": ["vocab"]
+  },
+  {
+    "notetype": "Cloze",
+    "deck": "Spanish",
+    "fields": { "Text": "{{c1::el gato}} means cat" }
+  }
 ]
 ```
 
