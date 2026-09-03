@@ -1,8 +1,11 @@
-//! Just enough CSS to honour what card templates typically do: align a block, shrink or
-//! embolden text, colour it, or hide it. Anything else is ignored.
+//! Card stylesheets, reduced to what a terminal can show. Parsing and selector
+//! matching are simplecss's job; this module only interprets the handful of
+//! properties with a terminal equivalent: alignment, weight, slant, decoration,
+//! size, colour, and hiding.
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
+use simplecss::{AttributeOperator, Declaration, DeclarationTokenizer, PseudoClass, Selector};
 
 /// The terminal-relevant part of a declaration block.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -36,70 +39,66 @@ impl Decl {
         self.hidden |= other.hidden;
     }
 
-    /// Parses `prop: value; prop: value` as found in rule bodies and `style` attributes.
+    /// Parses `prop: value; prop: value` as found in `style` attributes.
     pub fn parse(body: &str) -> Decl {
         let mut decl = Decl::default();
-        for item in body.split(';') {
-            let Some((prop, value)) = item.split_once(':') else {
-                continue;
-            };
-            let prop = prop.trim().to_ascii_lowercase();
-            let value = value
-                .trim()
-                .trim_end_matches("!important")
-                .trim()
-                .to_ascii_lowercase();
-            match prop.as_str() {
-                "color" => match terminal_color(&value) {
-                    Some(Tone::Color(color)) => decl.fg = Some(color),
-                    Some(Tone::Faint) => decl.add |= Modifier::DIM,
-                    None => {}
-                },
-                "font-weight" => {
-                    let bold = value == "bold"
-                        || value == "bolder"
-                        || value.parse::<u32>().is_ok_and(|w| w >= 600);
-                    if bold {
-                        decl.add |= Modifier::BOLD;
-                    } else if value == "normal" || value == "lighter" {
-                        decl.remove |= Modifier::BOLD;
-                    }
-                }
-                "font-style" => {
-                    if value == "italic" || value == "oblique" {
-                        decl.add |= Modifier::ITALIC;
-                    } else if value == "normal" {
-                        decl.remove |= Modifier::ITALIC;
-                    }
-                }
-                "text-decoration" | "text-decoration-line" => {
-                    if value.contains("underline") {
-                        decl.add |= Modifier::UNDERLINED;
-                    } else if value.contains("line-through") {
-                        decl.add |= Modifier::CROSSED_OUT;
-                    } else if value == "none" {
-                        decl.remove |= Modifier::UNDERLINED | Modifier::CROSSED_OUT;
-                    }
-                }
-                "font-size" => match size_class(&value) {
-                    Some(Size::Small) => decl.add |= Modifier::DIM,
-                    Some(Size::Large) => decl.add |= Modifier::BOLD,
-                    None => {}
-                },
-                "text-align" => {
-                    decl.align = match value.as_str() {
-                        "left" | "start" => Some(Alignment::Left),
-                        "right" | "end" => Some(Alignment::Right),
-                        "center" => Some(Alignment::Center),
-                        _ => None,
-                    }
-                }
-                "display" if value == "none" => decl.hidden = true,
-                "visibility" if value == "hidden" => decl.hidden = true,
-                _ => {}
-            }
+        for declaration in DeclarationTokenizer::from(body) {
+            decl.set(&declaration);
         }
         decl
+    }
+
+    fn set(&mut self, declaration: &Declaration<'_>) {
+        let value = declaration.value.trim().to_ascii_lowercase();
+        match declaration.name.to_ascii_lowercase().as_str() {
+            "color" => match terminal_color(&value) {
+                Some(Tone::Color(color)) => self.fg = Some(color),
+                Some(Tone::Faint) => self.add |= Modifier::DIM,
+                None => {}
+            },
+            "font-weight" => {
+                let bold = value == "bold"
+                    || value == "bolder"
+                    || value.parse::<u32>().is_ok_and(|w| w >= 600);
+                if bold {
+                    self.add |= Modifier::BOLD;
+                } else if value == "normal" || value == "lighter" {
+                    self.remove |= Modifier::BOLD;
+                }
+            }
+            "font-style" => {
+                if value == "italic" || value == "oblique" {
+                    self.add |= Modifier::ITALIC;
+                } else if value == "normal" {
+                    self.remove |= Modifier::ITALIC;
+                }
+            }
+            "text-decoration" | "text-decoration-line" => {
+                if value.contains("underline") {
+                    self.add |= Modifier::UNDERLINED;
+                } else if value.contains("line-through") {
+                    self.add |= Modifier::CROSSED_OUT;
+                } else if value == "none" {
+                    self.remove |= Modifier::UNDERLINED | Modifier::CROSSED_OUT;
+                }
+            }
+            "font-size" => match size_class(&value) {
+                Some(Size::Small) => self.add |= Modifier::DIM,
+                Some(Size::Large) => self.add |= Modifier::BOLD,
+                None => {}
+            },
+            "text-align" => {
+                self.align = match value.as_str() {
+                    "left" | "start" => Some(Alignment::Left),
+                    "right" | "end" => Some(Alignment::Right),
+                    "center" => Some(Alignment::Center),
+                    _ => None,
+                }
+            }
+            "display" if value == "none" => self.hidden = true,
+            "visibility" if value == "hidden" => self.hidden = true,
+            _ => {}
+        }
     }
 }
 
@@ -180,8 +179,8 @@ pub fn terminal_color(value: &str) -> Option<Tone> {
 
 fn rgb(value: &str) -> Option<(u8, u8, u8)> {
     if let Some(hex) = value.strip_prefix('#') {
-        let hex = hex.trim();
         let digits: Vec<u8> = hex
+            .trim()
             .chars()
             .map(|c| c.to_digit(16).map(|d| d as u8))
             .collect::<Option<_>>()?;
@@ -232,196 +231,144 @@ fn rgb(value: &str) -> Option<(u8, u8, u8)> {
     })
 }
 
-/// One compound selector such as `div.source#main`.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct Compound {
-    tag: Option<String>,
-    classes: Vec<String>,
-    id: Option<String>,
-}
-
-impl Compound {
-    fn parse(text: &str) -> Option<Self> {
-        let mut compound = Compound::default();
-        let mut rest = text;
-        while !rest.is_empty() {
-            let kind = rest.chars().next()?;
-            let body = if matches!(kind, '.' | '#') {
-                &rest[1..]
-            } else {
-                rest
-            };
-            let end = body.find(['.', '#', ':', '[']).unwrap_or(body.len());
-            let name = body[..end].to_ascii_lowercase();
-            if name.is_empty() {
-                return None;
-            }
-            match kind {
-                '.' => compound.classes.push(name),
-                '#' => compound.id = Some(name),
-                _ if name == "*" => {}
-                _ => compound.tag = Some(name),
-            }
-            let consumed = if matches!(kind, '.' | '#') {
-                end + 1
-            } else {
-                end
-            };
-            rest = &rest[consumed..];
-            // Pseudo-classes and attribute selectors have no terminal meaning; skip them.
-            if let Some(stripped) = rest.strip_prefix(':') {
-                let end = stripped.find(['.', '#', '[']).unwrap_or(stripped.len());
-                rest = &stripped[end..];
-            }
-            if let Some(stripped) = rest.strip_prefix('[') {
-                let end = stripped.find(']').map(|e| e + 1).unwrap_or(stripped.len());
-                rest = &stripped[end..];
-            }
-        }
-        Some(compound)
-    }
-
-    fn matches(&self, element: &ElementRef<'_>) -> bool {
-        self.tag.as_deref().is_none_or(|tag| tag == element.tag)
-            && self.id.as_deref().is_none_or(|id| Some(id) == element.id)
-            && self
-                .classes
-                .iter()
-                .all(|class| element.classes.contains(&class.as_str()))
-    }
-
-    fn specificity(&self) -> u32 {
-        u32::from(self.id.is_some()) * 100
-            + self.classes.len() as u32 * 10
-            + u32::from(self.tag.is_some())
-    }
-}
-
-/// What a stylesheet needs to know about an element and its ancestors.
+/// What the stylesheet needs to know about an element: its tag and attributes, with
+/// names lowercased.
 #[derive(Debug, Clone, Copy)]
 pub struct ElementRef<'a> {
     pub tag: &'a str,
-    pub classes: &'a [&'a str],
-    pub id: Option<&'a str>,
+    pub attrs: &'a [(String, String)],
 }
 
-#[derive(Debug)]
-struct Rule {
-    /// Outermost first; the last compound must match the element itself.
-    path: Vec<Compound>,
-    decl: Decl,
-    specificity: u32,
+impl ElementRef<'_> {
+    pub fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
-#[derive(Debug, Default)]
-pub struct Stylesheet {
-    rules: Vec<Rule>,
+/// An element inside its ancestor chain (outermost first), as simplecss wants to walk it.
+#[derive(Clone, Copy)]
+struct Node<'a> {
+    chain: &'a [ElementRef<'a>],
+    index: usize,
 }
 
-impl Stylesheet {
-    pub fn parse(css: &str) -> Self {
-        let mut rules = Vec::new();
-        let mut rest = strip_comments(css);
-        let mut text = rest.as_str();
-        while let Some(open) = text.find('{') {
-            let selectors = text[..open].trim();
-            let after = &text[open + 1..];
-            if selectors.starts_with('@') {
-                // Skip at-rules (@font-face, @media ...) together with their block.
-                text = skip_block(after);
-                continue;
-            }
-            let Some(close) = after.find('}') else { break };
-            let decl = Decl::parse(&after[..close]);
-            for selector in selectors.split(',') {
-                let path: Option<Vec<Compound>> = selector
-                    .split_whitespace()
-                    .filter(|part| *part != ">")
-                    .map(Compound::parse)
-                    .collect();
-                if let Some(path) = path.filter(|p| !p.is_empty()) {
-                    let specificity = path.iter().map(Compound::specificity).sum();
-                    rules.push(Rule {
-                        path,
-                        decl,
-                        specificity,
-                    });
-                }
-            }
-            text = &after[close + 1..];
+impl simplecss::Element for Node<'_> {
+    fn parent_element(&self) -> Option<Self> {
+        self.index.checked_sub(1).map(|index| Node {
+            chain: self.chain,
+            index,
+        })
+    }
+
+    /// Siblings are not tracked, so `:first-child` and friends never match.
+    fn prev_sibling_element(&self) -> Option<Self> {
+        None
+    }
+
+    fn has_local_name(&self, name: &str) -> bool {
+        self.chain[self.index].tag == name
+    }
+
+    fn attribute_matches(&self, local_name: &str, operator: AttributeOperator<'_>) -> bool {
+        let Some(value) = self.chain[self.index].attr(local_name) else {
+            return false;
+        };
+        match operator {
+            AttributeOperator::Exists => true,
+            AttributeOperator::Matches(expected) => value == expected,
+            AttributeOperator::Contains(word) => value.split_whitespace().any(|w| w == word),
+            AttributeOperator::StartsWith(prefix) => value.starts_with(prefix),
         }
-        rest.clear();
-        // Stable sort keeps source order among equals, so later rules win like in CSS.
-        rules.sort_by_key(|rule| rule.specificity);
+    }
+
+    fn pseudo_class_matches(&self, _class: PseudoClass<'_>) -> bool {
+        false
+    }
+}
+
+struct Rule<'a> {
+    selector: Selector<'a>,
+    normal: Decl,
+    important: Decl,
+}
+
+/// A parsed stylesheet; borrows the CSS text like simplecss does.
+#[derive(Default)]
+pub struct Stylesheet<'a> {
+    /// In specificity order, so later matches override earlier ones.
+    rules: Vec<Rule<'a>>,
+}
+
+impl<'a> Stylesheet<'a> {
+    pub fn parse(css: &'a str) -> Self {
+        let rules = simplecss::StyleSheet::parse(css)
+            .rules
+            .into_iter()
+            .map(|rule| {
+                let mut normal = Decl::default();
+                let mut important = Decl::default();
+                for declaration in &rule.declarations {
+                    let target = if declaration.important {
+                        &mut important
+                    } else {
+                        &mut normal
+                    };
+                    target.set(declaration);
+                }
+                Rule {
+                    selector: rule.selector,
+                    normal,
+                    important,
+                }
+            })
+            .collect();
         Self { rules }
     }
 
     /// Combined declaration for the last element in `chain` (outermost first).
     pub fn declaration_for(&self, chain: &[ElementRef<'_>]) -> Decl {
         let mut decl = Decl::default();
-        let Some(element) = chain.last() else {
+        if chain.is_empty() {
             return decl;
+        }
+        let node = Node {
+            chain,
+            index: chain.len() - 1,
         };
-        for rule in &self.rules {
-            let (last, ancestors) = rule.path.split_last().expect("non-empty path");
-            if last.matches(element) && ancestors_match(ancestors, &chain[..chain.len() - 1]) {
-                decl.merge(&rule.decl);
-            }
+        let matching: Vec<&Rule<'_>> = self
+            .rules
+            .iter()
+            .filter(|rule| rule.selector.matches(&node))
+            .collect();
+        for rule in &matching {
+            decl.merge(&rule.normal);
+        }
+        for rule in &matching {
+            decl.merge(&rule.important);
         }
         decl
     }
-}
-
-/// Descendant matching: every ancestor compound must match some ancestor, in order.
-fn ancestors_match(compounds: &[Compound], ancestors: &[ElementRef<'_>]) -> bool {
-    let mut remaining = compounds;
-    for ancestor in ancestors {
-        if let Some((first, rest)) = remaining.split_first()
-            && first.matches(ancestor)
-        {
-            remaining = rest;
-        }
-    }
-    remaining.is_empty()
-}
-
-fn strip_comments(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
-    let mut rest = css;
-    while let Some(start) = rest.find("/*") {
-        out.push_str(&rest[..start]);
-        rest = match rest[start + 2..].find("*/") {
-            Some(end) => &rest[start + 2 + end + 2..],
-            None => "",
-        };
-    }
-    out.push_str(rest);
-    out
-}
-
-fn skip_block(text: &str) -> &str {
-    let mut depth = 1usize;
-    for (i, c) in text.char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &text[i + 1..];
-                }
-            }
-            _ => {}
-        }
-    }
-    ""
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn el<'a>(tag: &'a str, classes: &'a [&'a str], id: Option<&'a str>) -> ElementRef<'a> {
-        ElementRef { tag, classes, id }
+    fn attrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn chain<'a>(elements: &'a [(&'a str, &'a [(String, String)])]) -> Vec<ElementRef<'a>> {
+        elements
+            .iter()
+            .map(|(tag, attrs)| ElementRef { tag, attrs })
+            .collect()
     }
 
     #[test]
@@ -430,22 +377,68 @@ mod tests {
             "/* comment */ .source { padding-top: 20px; font-size: 50%; text-align: right }\n\
              .source a { text-decoration: none }",
         );
-        let source = sheet.declaration_for(&[el("div", &["source"], None)]);
+        let source_attrs = attrs(&[("class", "source")]);
+        let none = attrs(&[]);
+        let source = sheet.declaration_for(&chain(&[("div", &source_attrs)]));
         assert_eq!(source.align, Some(Alignment::Right));
         assert!(source.add.contains(Modifier::DIM));
-        let link = sheet.declaration_for(&[el("div", &["source"], None), el("a", &[], None)]);
+        let link = sheet.declaration_for(&chain(&[("div", &source_attrs), ("a", &none)]));
         assert!(link.remove.contains(Modifier::UNDERLINED));
-        let other_link = sheet.declaration_for(&[el("div", &[], None), el("a", &[], None)]);
+        let other_link = sheet.declaration_for(&chain(&[("div", &none), ("a", &none)]));
         assert_eq!(other_link, Decl::default());
     }
 
     #[test]
-    fn later_and_more_specific_rules_win() {
-        let sheet = Stylesheet::parse("b { color: red } .x { color: blue } b { color: green }");
-        let plain = sheet.declaration_for(&[el("b", &[], None)]);
-        assert_eq!(plain.fg, Some(Color::Green));
-        let classed = sheet.declaration_for(&[el("b", &["x"], None)]);
-        assert_eq!(classed.fg, Some(Color::Blue));
+    fn later_more_specific_and_important_rules_win() {
+        let sheet = Stylesheet::parse(
+            "b { color: red } .x { color: blue } b { color: green } \
+             i { color: red !important } i.y { color: blue }",
+        );
+        let none = attrs(&[]);
+        let x = attrs(&[("class", "x")]);
+        let y = attrs(&[("class", "y")]);
+        assert_eq!(
+            sheet.declaration_for(&chain(&[("b", &none)])).fg,
+            Some(Color::Green)
+        );
+        assert_eq!(
+            sheet.declaration_for(&chain(&[("b", &x)])).fg,
+            Some(Color::Blue)
+        );
+        assert_eq!(
+            sheet.declaration_for(&chain(&[("i", &y)])).fg,
+            Some(Color::Red)
+        );
+    }
+
+    #[test]
+    fn child_combinators_and_attribute_selectors_match() {
+        let sheet = Stylesheet::parse(
+            "div > b { font-weight: normal } a[href] { color: green } \
+             span[lang=\"de\"] { font-style: italic }",
+        );
+        let none = attrs(&[]);
+        let nested = sheet.declaration_for(&chain(&[("div", &none), ("p", &none), ("b", &none)]));
+        assert_eq!(
+            nested,
+            Decl::default(),
+            "child combinator needs a direct parent"
+        );
+        let direct = sheet.declaration_for(&chain(&[("div", &none), ("b", &none)]));
+        assert!(direct.remove.contains(Modifier::BOLD));
+        let href = attrs(&[("href", "x")]);
+        assert_eq!(
+            sheet.declaration_for(&chain(&[("a", &href)])).fg,
+            Some(Color::Green)
+        );
+        assert_eq!(sheet.declaration_for(&chain(&[("a", &none)])).fg, None);
+        let de = attrs(&[("lang", "de")]);
+        assert!(
+            sheet
+                .declaration_for(&chain(&[("span", &de)]))
+                .add
+                .contains(Modifier::ITALIC)
+        );
     }
 
     #[test]
@@ -468,14 +461,16 @@ mod tests {
             "@font-face { font-family: x; src: url(y) } a:hover { color: red } \
              @media (max-width: 600px) { .card { display: none } } .hidden { display: none }",
         );
-        let link = sheet.declaration_for(&[el("a", &[], None)]);
-        assert_eq!(link.fg, Some(Color::Red));
-        assert!(!sheet.declaration_for(&[el("div", &["card"], None)]).hidden);
-        assert!(
-            sheet
-                .declaration_for(&[el("div", &["hidden"], None)])
-                .hidden
+        let none = attrs(&[]);
+        let card = attrs(&[("class", "card")]);
+        let hidden = attrs(&[("class", "hidden")]);
+        assert_eq!(
+            sheet.declaration_for(&chain(&[("a", &none)])).fg,
+            None,
+            "hover never applies"
         );
+        assert!(!sheet.declaration_for(&chain(&[("div", &card)])).hidden);
+        assert!(sheet.declaration_for(&chain(&[("div", &hidden)])).hidden);
     }
 
     #[test]

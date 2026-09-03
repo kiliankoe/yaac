@@ -41,7 +41,7 @@ pub fn nodes_to_html(nodes: &[RenderedNode], answer_side: bool) -> String {
 /// Renders HTML to lines with inline styling and per-line alignment. Whitespace
 /// collapses like a browser's, block elements end lines without adding blank ones, and
 /// `<br>` runs never produce more than one blank line.
-pub fn html_to_lines(html: &str, sheet: &Stylesheet) -> Vec<Line<'static>> {
+pub fn html_to_lines(html: &str, sheet: &Stylesheet<'_>) -> Vec<Line<'static>> {
     let mut out = Builder::new(sheet);
     let mut rest = html;
     while !rest.is_empty() {
@@ -147,16 +147,15 @@ const BLOCK_TAGS: &[&str] = &[
 /// looks like.
 struct Element {
     tag: String,
-    classes: Vec<String>,
-    id: Option<String>,
+    attrs: Vec<(String, String)>,
     style: Style,
     /// Own `text-align`; None inherits from the enclosing block.
     align: Option<Alignment>,
     hidden: bool,
 }
 
-struct Builder<'s> {
-    sheet: &'s Stylesheet,
+struct Builder<'s, 'c> {
+    sheet: &'s Stylesheet<'c>,
     lines: Vec<Line<'static>>,
     current: Vec<Span<'static>>,
     elements: Vec<Element>,
@@ -165,8 +164,8 @@ struct Builder<'s> {
     list_depth: usize,
 }
 
-impl<'s> Builder<'s> {
-    fn new(sheet: &'s Stylesheet) -> Self {
+impl<'s, 'c> Builder<'s, 'c> {
+    fn new(sheet: &'s Stylesheet<'c>) -> Self {
         let mut builder = Self {
             sheet,
             lines: Vec::new(),
@@ -251,7 +250,12 @@ impl<'s> Builder<'s> {
             ("br", _) => self.newline(),
             ("hr", false) => self.rule(),
             ("img", false) => {
-                let src = attr(body, "src").unwrap_or_default();
+                let attrs = attrs(body);
+                let src = attrs
+                    .iter()
+                    .find(|(name, _)| name == "src")
+                    .map(|(_, value)| value.as_str())
+                    .unwrap_or_default();
                 let name = Path::new(src)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -273,41 +277,31 @@ impl<'s> Builder<'s> {
         } else {
             self.flush_space();
         }
-        let classes: Vec<String> = attr(body, "class")
-            .unwrap_or_default()
-            .split_whitespace()
-            .map(str::to_ascii_lowercase)
-            .collect();
-        let id = attr(body, "id").map(str::to_ascii_lowercase);
+        let attrs = attrs(body);
+        let classes: Vec<&str> = attrs
+            .iter()
+            .find(|(name, _)| name == "class")
+            .map(|(_, value)| value.split_whitespace().collect())
+            .unwrap_or_default();
 
         let builtin = builtin_decl(tag, &classes);
         let sheet_decl = {
-            let class_refs: Vec<Vec<&str>> = self
-                .elements
-                .iter()
-                .map(|e| e.classes.iter().map(String::as_str).collect())
-                .chain(std::iter::once(
-                    classes.iter().map(String::as_str).collect(),
-                ))
-                .collect();
             let chain: Vec<ElementRef<'_>> = self
                 .elements
                 .iter()
-                .zip(&class_refs)
-                .map(|(e, classes)| ElementRef {
+                .map(|e| ElementRef {
                     tag: &e.tag,
-                    classes,
-                    id: e.id.as_deref(),
+                    attrs: &e.attrs,
                 })
-                .chain(std::iter::once(ElementRef {
-                    tag,
-                    classes: class_refs.last().expect("own classes"),
-                    id: id.as_deref(),
-                }))
+                .chain(std::iter::once(ElementRef { tag, attrs: &attrs }))
                 .collect();
             self.sheet.declaration_for(&chain)
         };
-        let inline = attr(body, "style").map(Decl::parse).unwrap_or_default();
+        let inline = attrs
+            .iter()
+            .find(|(name, _)| name == "style")
+            .map(|(_, value)| Decl::parse(value))
+            .unwrap_or_default();
 
         let parent = self.elements.last();
         let mut style = parent.map(|e| e.style).unwrap_or_default();
@@ -322,8 +316,7 @@ impl<'s> Builder<'s> {
         }
         self.elements.push(Element {
             tag: tag.to_string(),
-            classes,
-            id,
+            attrs,
             style,
             align,
             hidden,
@@ -395,7 +388,7 @@ impl<'s> Builder<'s> {
 }
 
 /// What a browser does with a tag before any stylesheet is involved.
-fn builtin_decl(tag: &str, classes: &[String]) -> Decl {
+fn builtin_decl(tag: &str, classes: &[&str]) -> Decl {
     let mut decl = Decl::default();
     match tag {
         "b" | "strong" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => decl.add |= Modifier::BOLD,
@@ -410,31 +403,52 @@ fn builtin_decl(tag: &str, classes: &[String]) -> Decl {
         "small" | "sub" | "sup" => decl.add |= Modifier::DIM,
         _ => {}
     }
-    if classes.iter().any(|c| c == "cloze") {
+    if classes.contains(&"cloze") {
         decl.fg = Some(Color::Blue);
         decl.add |= Modifier::BOLD;
     }
     decl
 }
 
-/// Value of an attribute inside a tag body, quotes stripped.
-fn attr<'a>(body: &'a str, name: &str) -> Option<&'a str> {
-    let lower = body.to_ascii_lowercase();
-    let mut search = 0;
-    while let Some(pos) = lower[search..].find(name) {
-        let start = search + pos;
-        let after = &body[start + name.len()..];
-        let boundary_ok = start == 0 || !lower.as_bytes()[start - 1].is_ascii_alphanumeric();
-        if boundary_ok && after.trim_start().starts_with('=') {
-            let value = after.trim_start()[1..].trim_start();
-            return Some(match value.chars().next() {
-                Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or(""),
-                _ => value.split_whitespace().next().unwrap_or(""),
-            });
+/// Every attribute inside a tag body as lowercased name and unquoted value; bare
+/// attributes get an empty value.
+fn attrs(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = body
+        .trim_start()
+        .trim_start_matches(|c: char| !c.is_whitespace())
+        .trim_start();
+    while !rest.is_empty() {
+        let name_end = rest
+            .find(|c: char| c.is_whitespace() || c == '=')
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].trim_end_matches('/').to_ascii_lowercase();
+        rest = rest[name_end..].trim_start();
+        let mut value = String::new();
+        if let Some(after) = rest.strip_prefix('=') {
+            let after = after.trim_start();
+            let consumed = match after.chars().next() {
+                Some(quote @ ('"' | '\'')) => {
+                    let inner = &after[1..];
+                    let end = inner.find(quote).unwrap_or(inner.len());
+                    value = inner[..end].to_string();
+                    (end + 2).min(after.len())
+                }
+                _ => {
+                    let end = after
+                        .find(|c: char| c.is_whitespace())
+                        .unwrap_or(after.len());
+                    value = after[..end].to_string();
+                    end
+                }
+            };
+            rest = after[consumed..].trim_start();
         }
-        search = start + name.len();
+        if !name.is_empty() {
+            out.push((name, value));
+        }
     }
-    None
+    out
 }
 
 #[cfg(test)]
@@ -557,6 +571,20 @@ mod tests {
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn attributes_parse_quoted_unquoted_and_bare() {
+        let parsed = attrs("div class='a b' ID=main hidden data-x=\"1\"/");
+        assert_eq!(
+            parsed,
+            [
+                ("class".to_string(), "a b".to_string()),
+                ("id".to_string(), "main".to_string()),
+                ("hidden".to_string(), String::new()),
+                ("data-x".to_string(), "1".to_string()),
+            ]
         );
     }
 
