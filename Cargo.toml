@@ -1,0 +1,23 @@
+[package]
+name = "yaac"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Terminal Anki client built on Anki's own Rust backend"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+# Pinned to the installed Anki desktop version; bump together with it.
+anki = { git = "https://github.com/ankitects/anki", tag = "26.08.1" }
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Only here to enable io-util, which rslib needs but does not request itself.
+tokio = { version = "1.53", features = ["io-util"] }
+
+[dev-dependencies]
+assert_cmd = "2.2"
+predicates = "3.1"
+tempfile = "3.27"
