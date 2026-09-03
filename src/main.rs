@@ -1,4 +1,6 @@
 mod cli;
+mod config;
+mod notes;
 mod output;
 mod session;
 

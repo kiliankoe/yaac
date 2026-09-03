@@ -1,13 +1,14 @@
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anki::search::SortMode;
 use anki::timestamp::TimestampSecs;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
+use crate::cli::Context;
 use crate::output;
-use crate::session::Session;
+use crate::session::{AnkiResultExt, Session};
 
 #[derive(Serialize)]
 struct Info {
@@ -28,37 +29,31 @@ struct Due {
     review: u32,
 }
 
-pub fn run(collection: Option<&Path>, json: bool) -> Result<()> {
-    let mut session = Session::open(collection)?;
+pub fn run(ctx: &Context) -> Result<()> {
+    let mut session = ctx.open()?;
     let info = collect(&mut session)?;
     session.close()?;
-    output::emit(&info, json)
+    output::emit(&info, ctx.json)
 }
 
 fn collect(session: &mut Session) -> Result<Info> {
     let col = &mut session.col;
-    let notes = col
-        .search_notes_unordered("")
-        .context("counting notes")?
-        .len();
+    let notes = col.search_notes_unordered("").ctx("counting notes")?.len();
     let cards = col
         .search_cards("", SortMode::NoOrder)
-        .context("counting cards")?
+        .ctx("counting cards")?
         .len();
-    let decks = col
-        .get_all_deck_names(false)
-        .context("listing decks")?
-        .len();
+    let decks = col.get_all_deck_names(false).ctx("listing decks")?.len();
     let notetypes = col
         .storage
         .get_all_notetype_names()
-        .context("listing notetypes")?
+        .ctx("listing notetypes")?
         .len();
     // The tree root carries the collection-wide counts with limits applied, the same
     // numbers the desktop shows on its deck list.
     let root = col
         .deck_tree(Some(TimestampSecs::now()))
-        .context("computing due counts")?;
+        .ctx("computing due counts")?;
 
     Ok(Info {
         collection: session.path.clone(),

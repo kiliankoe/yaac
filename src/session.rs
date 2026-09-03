@@ -6,6 +6,8 @@ use anki::error::{AnkiError, DbErrorKind};
 use anki::prelude::I18n;
 use anyhow::{Context, Result, bail};
 
+use crate::config::Config;
+
 const COLLECTION_FILE: &str = "collection.anki2";
 
 /// An open collection plus where it came from. One per process.
@@ -56,9 +58,25 @@ impl fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
+/// rslib errors carry their user-facing text behind a translation lookup.
+pub fn anki_error(err: AnkiError) -> anyhow::Error {
+    anyhow::anyhow!(err.message(&I18n::new(&["en"])))
+}
+
+/// Converts an rslib result into an anyhow one with a description of what was attempted.
+pub trait AnkiResultExt<T> {
+    fn ctx(self, what: &str) -> Result<T>;
+}
+
+impl<T> AnkiResultExt<T> for anki::error::Result<T> {
+    fn ctx(self, what: &str) -> Result<T> {
+        self.map_err(anki_error).context(what.to_string())
+    }
+}
+
 impl Session {
-    pub fn open(explicit: Option<&Path>) -> Result<Self> {
-        let path = match explicit {
+    pub fn open(explicit: Option<&Path>, config: &Config) -> Result<Self> {
+        let path = match explicit.or(config.collection.as_deref()) {
             Some(path) => path.to_path_buf(),
             None => discover_collection()?,
         };
@@ -82,12 +100,30 @@ impl Session {
         Ok(Self { col, path })
     }
 
-    pub fn close(self) -> Result<()> {
-        let tr = self.col.tr().clone();
+    /// Closes the collection, first taking a backup the way the desktop does on exit:
+    /// only if something changed, and not more often than the collection's backup
+    /// settings allow.
+    pub fn close(mut self) -> Result<()> {
+        let backup_dir = self.path.parent().map(|dir| dir.join("backups"));
+        let pending = match backup_dir {
+            Some(dir) => {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                self.col.maybe_backup(dir, false).ctx("starting backup")?
+            }
+            None => None,
+        };
         self.col
             .close(None)
-            .map_err(|err| anyhow::anyhow!(err.message(&tr)))
-            .with_context(|| format!("closing {}", self.path.display()))
+            .ctx("closing collection")
+            .with_context(|| format!("closing {}", self.path.display()))?;
+        if let Some(handle) = pending {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("backup thread panicked"))?
+                .ctx("writing backup")?;
+        }
+        Ok(())
     }
 }
 

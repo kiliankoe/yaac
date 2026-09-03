@@ -1,39 +1,22 @@
-use std::path::{Path, PathBuf};
+mod common;
 
 use anki::collection::CollectionBuilder;
-use assert_cmd::Command;
+use common::{fresh_collection, json, yaac, yaac_on};
 use predicates::prelude::*;
-
-/// A brand-new collection with Anki's stock notetypes, closed again so the binary can open it.
-fn fresh_collection(dir: &Path) -> PathBuf {
-    let path = dir.join("collection.anki2");
-    CollectionBuilder::new(&path)
-        .build()
-        .expect("create collection")
-        .close(None)
-        .expect("close collection");
-    path
-}
-
-fn yaac() -> Command {
-    let mut cmd = Command::cargo_bin("yaac").expect("binary built");
-    cmd.env_remove("YAAC_COLLECTION").env_remove("ANKI_BASE");
-    cmd
-}
 
 #[test]
 fn info_reports_counts_of_a_fresh_collection() {
     let dir = tempfile::tempdir().unwrap();
     let path = fresh_collection(dir.path());
 
-    let output = yaac()
-        .args(["--collection", path.to_str().unwrap(), "info", "--json"])
+    let output = yaac_on(&path)
+        .args(["info", "--json"])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    let info: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let info = json(&output);
 
     assert_eq!(info["collection"], path.to_str().unwrap());
     assert_eq!(info["notes"], 0);
@@ -52,8 +35,8 @@ fn info_prints_a_human_summary_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let path = fresh_collection(dir.path());
 
-    yaac()
-        .args(["--collection", path.to_str().unwrap(), "info"])
+    yaac_on(&path)
+        .arg("info")
         .assert()
         .success()
         .stdout(predicate::str::contains("Notes       0"))
@@ -69,8 +52,8 @@ fn info_exits_with_3_while_another_process_holds_the_collection() {
     // Holding the collection open here is what Anki desktop does.
     let _held = CollectionBuilder::new(&path).build().unwrap();
 
-    yaac()
-        .args(["--collection", path.to_str().unwrap(), "info"])
+    yaac_on(&path)
+        .arg("info")
         .assert()
         .code(3)
         .stderr(predicate::str::contains("Anki desktop is probably running"));
@@ -81,8 +64,8 @@ fn info_refuses_to_create_a_missing_collection() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("typo.anki2");
 
-    yaac()
-        .args(["--collection", path.to_str().unwrap(), "info"])
+    yaac_on(&path)
+        .arg("info")
         .assert()
         .code(1)
         .stderr(predicate::str::contains("collection not found"));
@@ -107,8 +90,7 @@ fn info_discovers_the_only_profile_under_anki_base() {
         .get_output()
         .stdout
         .clone();
-    let info: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(info["collection"], path.to_str().unwrap());
+    assert_eq!(json(&output)["collection"], path.to_str().unwrap());
 }
 
 #[test]
@@ -128,4 +110,26 @@ fn info_refuses_to_guess_between_several_profiles() {
         .stderr(predicate::str::contains("several profiles"))
         .stderr(predicate::str::contains("User 1"))
         .stderr(predicate::str::contains("Work"));
+}
+
+#[test]
+fn collection_path_can_come_from_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!("collection = {:?}\n", path.to_str().unwrap()),
+    )
+    .unwrap();
+
+    let output = yaac()
+        .env("YAAC_CONFIG", &config)
+        .args(["info", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(json(&output)["collection"], path.to_str().unwrap());
 }
