@@ -11,6 +11,7 @@ use ratatui::style::Color;
 use yaac::config::Config;
 use yaac::review::{Kind, Reviewer};
 use yaac::session::Session;
+use yaac::tui::images::Images;
 use yaac::tui::review::{self, AGAIN, EASY, GOOD, HARD};
 
 fn rows(buffer: &Buffer) -> Vec<String> {
@@ -117,9 +118,10 @@ fn the_screen_centers_the_card_and_colors_the_answers() {
     let mut session = Session::open(Some(&path), &Config::default()).unwrap();
     let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut images = Images::disabled(dir.path().join("collection.media"));
 
     terminal
-        .draw(|frame| review::draw(frame, &reviewer))
+        .draw(|frame| review::draw(frame, &reviewer, &mut images))
         .unwrap();
     let screen = rows(terminal.backend().buffer());
     assert!(screen[0].contains("Default"), "deck in the status line");
@@ -144,7 +146,7 @@ fn the_screen_centers_the_card_and_colors_the_answers() {
 
     reviewer.reveal();
     terminal
-        .draw(|frame| review::draw(frame, &reviewer))
+        .draw(|frame| review::draw(frame, &reviewer, &mut images))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let screen = rows(&buffer);
@@ -179,5 +181,67 @@ fn esc_goes_back_to_the_deck_list_and_q_quits() {
     assert_eq!(
         review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char('q'))).unwrap(),
         review::Action::Quit
+    );
+}
+
+#[test]
+fn images_render_as_half_blocks_or_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let media = dir.path().join("collection.media");
+    std::fs::create_dir_all(&media).unwrap();
+    image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]))
+        .save(media.join("red.png"))
+        .unwrap();
+    let output = common::yaac_on(&path)
+        .args(["add", "-n", "Basic", "-d", "Default", "--json"])
+        .arg("Front=Which colour?<br><img src=\"red.png\">")
+        .arg("Back=Red")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(common::json(&output)[0]["fields"]["Back"], "Red");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+
+    let mut labels = Images::disabled(&media);
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut labels))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    assert!(screen.iter().any(|line| line.contains("Which colour?")));
+    assert!(
+        screen
+            .iter()
+            .any(|line| line.contains("[image: red.png] (images are off)"))
+    );
+
+    let mut blocks = Images::new(Some(ratatui_image::picker::Picker::halfblocks()), &media);
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut blocks))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let screen = rows(&buffer);
+    let question = screen
+        .iter()
+        .position(|line| line.contains("Which colour?"))
+        .expect("question above the image");
+    // A uniform image encodes as blank cells carrying the colour, so look for the
+    // colour rather than a glyph.
+    let red = Color::Rgb(200, 30, 30);
+    let painted = (question as u16 + 1..24)
+        .flat_map(|y| (0..80).map(move |x| (x, y)))
+        .filter(|&(x, y)| buffer[(x, y)].bg == red || buffer[(x, y)].fg == red)
+        .count();
+    assert!(
+        painted >= 4,
+        "expected a row of red cells below the question, got {painted}"
+    );
+    assert!(
+        !screen.iter().any(|line| line.contains("[image:")),
+        "no label when drawn"
     );
 }

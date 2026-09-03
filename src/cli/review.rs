@@ -13,6 +13,7 @@ use crate::review::Reviewer;
 use crate::session::AnkiResultExt;
 use crate::tui;
 use crate::tui::decks::{Choice, Picker};
+use crate::tui::images::{self, Images};
 use crate::tui::review::Action;
 
 #[derive(Args)]
@@ -48,6 +49,13 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
         seconds: 0,
     };
     let started = Instant::now();
+    let media_dir = session
+        .path
+        .parent()
+        .map(|dir| dir.join("collection.media"))
+        .unwrap_or_default();
+    // Probing writes to the terminal, so it happens before the alternate screen.
+    let mut images = Images::new(images::probe(ctx.config.images.as_deref()), media_dir);
 
     let mut terminal = tui::Terminal::open();
     loop {
@@ -60,7 +68,7 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
         };
         let action = {
             let mut reviewer = Reviewer::start(&mut session.col, DeckId(deck.0))?;
-            let action = tui::review::run(&mut terminal, &mut reviewer)?;
+            let action = tui::review::run(&mut terminal, &mut reviewer, &mut images)?;
             summary.answered += reviewer.answered;
             if !summary.decks.contains(&reviewer.deck) {
                 summary.decks.push(reviewer.deck.clone());

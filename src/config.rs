@@ -16,6 +16,8 @@ pub struct Config {
     pub auto_sync: bool,
     /// Self-hosted sync server URL; absent means AnkiWeb.
     pub sync_endpoint: Option<String>,
+    /// Terminal graphics: auto, kitty, sixel, iterm2, halfblocks, or off.
+    pub images: Option<String>,
 }
 
 impl Config {

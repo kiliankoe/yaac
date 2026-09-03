@@ -53,10 +53,13 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 | s            | suspend the card                                                        |
 | b            | bury the card until tomorrow                                            |
 | f            | cycle the card's flag colour                                            |
+| r            | re-transmit and redraw the card's images                                |
 | esc          | back to the deck list, with refreshed counts                            |
 | q            | quit; the session summary is printed afterwards                         |
 
-Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text: formatting, lists, and cloze deletions are kept, images and audio appear as labels until image support lands.
+Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text with the notetype's formatting where a terminal can show it: alignment, bold, italic, underline, small text, colours, lists, cloze deletions. Audio appears as a label.
+
+Images are drawn inline. yaac asks the terminal which graphics protocol it supports (Kitty, Sixel, or iTerm2) and falls back to half-block characters everywhere else, including Terminal.app and Alacritty. Kitty graphics work inside tmux when `allow-passthrough on` is set. tmux needs care there: it forwards placeholder cells without the marks that tell the terminal which part of the image a cell shows, so yaac sends those cells to the outer terminal directly whenever an image appears or moves (and on the two frames after, in case tmux dropped one), and it drops pane output that arrives faster than it can forward, so images are sent as PNG in paced bursts. `r` re-sends the current card's images if one still got lost. SVG files are rasterised with system fonts. Set `images` in the config to `kitty`, `sixel`, `iterm2`, or `halfblocks` to skip the probe, or `off` for labels only.
 
 ### Sync
 
@@ -100,6 +103,7 @@ default_notetype = "Basic"
 default_deck = "Inbox"
 auto_sync = false
 sync_endpoint = "https://sync.example.org/"   # only for self-hosted servers
+images = "auto"                                # kitty, sixel, iterm2, halfblocks, or off
 ```
 
 All keys are optional.

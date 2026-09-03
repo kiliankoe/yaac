@@ -2,7 +2,7 @@
 name = "yaac"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 description = "Terminal Anki client built on Anki's own Rust backend"
 license = "AGPL-3.0-or-later"
 publish = false
@@ -11,9 +11,14 @@ publish = false
 anki = { git = "https://github.com/ankitects/anki", tag = "26.08.1", features = ["rustls"] }
 anki_proto = { git = "https://github.com/ankitects/anki", tag = "26.08.1" }
 anyhow = "1.0"
+base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
 crossterm = "0.29"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+# Terminal graphics (Kitty, Sixel, iTerm2, half-blocks); default features would link libchafa.
+ratatui-image = { version = "11", default-features = false, features = ["image-defaults", "crossterm"] }
+image = "0.25"
+resvg = "0.48"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # CSS 2.1 parsing and selector matching for card stylesheets; usvg brings it in anyway.

@@ -38,10 +38,50 @@ pub fn nodes_to_html(nodes: &[RenderedNode], answer_side: bool) -> String {
     html
 }
 
-/// Renders HTML to lines with inline styling and per-line alignment. Whitespace
-/// collapses like a browser's, block elements end lines without adding blank ones, and
-/// `<br>` runs never produce more than one blank line.
+/// A card is text interrupted by images; each image is a block of its own so the
+/// screen can place a picture where the `<img>` sat.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Block {
+    Text(Vec<Line<'static>>),
+    Image {
+        src: String,
+        align: Option<Alignment>,
+    },
+}
+
+/// Text-only view of the card: images become `[image: name]` labels on their own line.
 pub fn html_to_lines(html: &str, sheet: &Stylesheet<'_>) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for block in html_to_blocks(html, sheet) {
+        match block {
+            Block::Text(text) => lines.extend(text),
+            Block::Image { src, align } => {
+                let mut line = Line::from(Span::styled(
+                    image_label(&src),
+                    Style::new().fg(Color::Cyan),
+                ));
+                if let Some(align) = align {
+                    line = line.alignment(align);
+                }
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
+pub fn image_label(src: &str) -> String {
+    let name = Path::new(src)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(src);
+    format!("[image: {name}]")
+}
+
+/// Renders HTML to text blocks with inline styling and per-line alignment, split by
+/// images. Whitespace collapses like a browser's, block elements end lines without
+/// adding blank ones, and `<br>` runs never produce more than one blank line.
+pub fn html_to_blocks(html: &str, sheet: &Stylesheet<'_>) -> Vec<Block> {
     let mut out = Builder::new(sheet);
     let mut rest = html;
     while !rest.is_empty() {
@@ -156,6 +196,7 @@ struct Element {
 
 struct Builder<'s, 'c> {
     sheet: &'s Stylesheet<'c>,
+    blocks: Vec<Block>,
     lines: Vec<Line<'static>>,
     current: Vec<Span<'static>>,
     elements: Vec<Element>,
@@ -168,6 +209,7 @@ impl<'s, 'c> Builder<'s, 'c> {
     fn new(sheet: &'s Stylesheet<'c>) -> Self {
         let mut builder = Self {
             sheet,
+            blocks: Vec::new(),
             lines: Vec::new(),
             current: Vec::new(),
             elements: Vec::new(),
@@ -256,11 +298,9 @@ impl<'s, 'c> Builder<'s, 'c> {
                     .find(|(name, _)| name == "src")
                     .map(|(_, value)| value.as_str())
                     .unwrap_or_default();
-                let name = Path::new(src)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(src);
-                self.label(&format!("[image: {name}]"));
+                if !self.hidden() && !src.is_empty() {
+                    self.image(src);
+                }
             }
             ("td" | "th", true) => self.text(" "),
             (_, false) => self.open(&name, body),
@@ -370,6 +410,26 @@ impl<'s, 'c> Builder<'s, 'c> {
         }
     }
 
+    /// Closes the text so far and records the image as a block of its own.
+    fn image(&mut self, src: &str) {
+        self.block_break();
+        self.flush_text();
+        self.blocks.push(Block::Image {
+            src: src.to_string(),
+            align: self.alignment(),
+        });
+    }
+
+    fn flush_text(&mut self) {
+        while self.lines.last().is_some_and(|l| l.width() == 0) {
+            self.lines.pop();
+        }
+        if !self.lines.is_empty() {
+            self.blocks
+                .push(Block::Text(std::mem::take(&mut self.lines)));
+        }
+    }
+
     fn rule(&mut self) {
         self.block_break();
         self.lines.push(Line::from(Span::styled(
@@ -378,12 +438,10 @@ impl<'s, 'c> Builder<'s, 'c> {
         )));
     }
 
-    fn finish(mut self) -> Vec<Line<'static>> {
+    fn finish(mut self) -> Vec<Block> {
         self.newline();
-        while self.lines.last().is_some_and(|l| l.width() == 0) {
-            self.lines.pop();
-        }
-        self.lines
+        self.flush_text();
+        self.blocks
     }
 }
 
@@ -501,12 +559,36 @@ mod tests {
             r#"<img src="/abs/path/map.png"> [sound:hello.mp3] <span class="cloze">[...]</span>"#,
             &Stylesheet::default(),
         );
-        assert_eq!(
-            lines[0].to_string(),
-            "[image: map.png] [audio: hello.mp3] [...]"
-        );
-        let cloze = lines[0].spans.last().unwrap();
+        assert_eq!(lines[0].to_string(), "[image: map.png]");
+        assert_eq!(lines[1].to_string(), "[audio: hello.mp3] [...]");
+        let cloze = lines[1].spans.last().unwrap();
         assert_eq!(cloze.style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn images_split_the_text_into_blocks_and_keep_their_alignment() {
+        let sheet = Stylesheet::parse(".right { text-align: right }");
+        let blocks = html_to_blocks(
+            "Question<div class=\"right\"><img src=\"map.png\"></div>Answer<img src=\"flag.svg\">",
+            &sheet,
+        );
+        assert_eq!(blocks.len(), 4);
+        assert!(matches!(&blocks[0], Block::Text(lines) if lines[0].to_string() == "Question"));
+        assert_eq!(
+            blocks[1],
+            Block::Image {
+                src: "map.png".to_string(),
+                align: Some(Alignment::Right)
+            }
+        );
+        assert!(matches!(&blocks[2], Block::Text(lines) if lines[0].to_string() == "Answer"));
+        assert_eq!(
+            blocks[3],
+            Block::Image {
+                src: "flag.svg".to_string(),
+                align: None
+            }
+        );
     }
 
     #[test]

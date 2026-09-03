@@ -1,6 +1,8 @@
 //! Terminal setup shared by the interactive screens.
 
 pub mod decks;
+pub mod images;
+pub mod kitty;
 pub mod review;
 
 use std::ops::{Deref, DerefMut};
