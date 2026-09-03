@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Instant;
 
 use anki::decks::DeckId;
 use anyhow::{Context as _, Result};
@@ -11,6 +12,8 @@ use crate::output;
 use crate::review::Reviewer;
 use crate::session::AnkiResultExt;
 use crate::tui;
+use crate::tui::decks::{Choice, Picker};
+use crate::tui::review::Action;
 
 #[derive(Args)]
 pub struct ReviewArgs {
@@ -21,14 +24,14 @@ pub struct ReviewArgs {
 
 #[derive(Serialize)]
 struct Summary {
-    deck: String,
+    decks: Vec<String>,
     answered: usize,
     seconds: u64,
 }
 
 pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
     let mut session = ctx.open()?;
-    let named = match &args.deck {
+    let mut pending = match &args.deck {
         Some(name) => Some(
             session
                 .col
@@ -38,32 +41,45 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
         ),
         None => None,
     };
-    let rows = decks::rows(&mut session.col)?;
-
-    let summary = {
-        let mut terminal = tui::Terminal::open();
-        let deck = match named {
-            Some(deck) => Some(deck),
-            None => tui::decks::pick(&mut terminal, &rows)?,
-        };
-        match deck {
-            None => None,
-            Some(deck) => {
-                let mut reviewer = Reviewer::start(&mut session.col, DeckId(deck.0))?;
-                tui::review::run(&mut terminal, &mut reviewer)?;
-                Some(Summary {
-                    deck: reviewer.deck.clone(),
-                    answered: reviewer.answered,
-                    seconds: reviewer.elapsed().as_secs(),
-                })
-            }
-        }
+    let mut picker = Picker::new(decks::rows(&mut session.col)?);
+    let mut summary = Summary {
+        decks: Vec::new(),
+        answered: 0,
+        seconds: 0,
     };
-    session.close()?;
-    match summary {
-        Some(summary) => output::emit(&summary, ctx.json),
-        None => Ok(()),
+    let started = Instant::now();
+
+    let mut terminal = tui::Terminal::open();
+    loop {
+        let deck = match pending.take() {
+            Some(deck) => deck,
+            None => match tui::decks::pick(&mut terminal, &mut session, &mut picker)? {
+                Choice::Deck(deck) => deck,
+                Choice::Quit => break,
+            },
+        };
+        let action = {
+            let mut reviewer = Reviewer::start(&mut session.col, DeckId(deck.0))?;
+            let action = tui::review::run(&mut terminal, &mut reviewer)?;
+            summary.answered += reviewer.answered;
+            if !summary.decks.contains(&reviewer.deck) {
+                summary.decks.push(reviewer.deck.clone());
+            }
+            action
+        };
+        picker.set_rows(decks::rows(&mut session.col)?);
+        if action == Action::Quit {
+            break;
+        }
     }
+    drop(terminal);
+
+    summary.seconds = started.elapsed().as_secs();
+    session.close()?;
+    if summary.decks.is_empty() {
+        return Ok(());
+    }
+    output::emit(&summary, ctx.json)
 }
 
 impl fmt::Display for Summary {
@@ -71,7 +87,7 @@ impl fmt::Display for Summary {
         writeln!(
             f,
             "{}: {} card(s) answered in {:02}:{:02}",
-            self.deck,
+            self.decks.join(", "),
             self.answered,
             self.seconds / 60,
             self.seconds % 60

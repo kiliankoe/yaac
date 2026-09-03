@@ -20,17 +20,24 @@ pub const HARD: Color = Color::Yellow;
 pub const GOOD: Color = Color::Green;
 pub const EASY: Color = Color::Blue;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Continue,
+    /// Back to the deck list.
+    Back,
+    /// Leave the TUI altogether.
     Quit,
 }
 
-pub fn run(terminal: &mut Terminal, reviewer: &mut Reviewer) -> Result<()> {
+/// Runs the review loop until the user leaves; returns whether they went back to the
+/// deck list or quit.
+pub fn run(terminal: &mut Terminal, reviewer: &mut Reviewer) -> Result<Action> {
     loop {
         terminal.draw(|frame| draw(frame, reviewer))?;
         if let Some(key) = next_key(Duration::from_millis(250))? {
-            if let Action::Quit = handle(reviewer, key)? {
-                return Ok(());
+            match handle(reviewer, key)? {
+                Action::Continue => {}
+                action => return Ok(action),
             }
         }
     }
@@ -39,7 +46,8 @@ pub fn run(terminal: &mut Terminal, reviewer: &mut Reviewer) -> Result<()> {
 pub fn handle(reviewer: &mut Reviewer, key: KeyEvent) -> Result<Action> {
     let revealed = reviewer.current.as_ref().is_some_and(|c| c.revealed);
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => return Ok(Action::Quit),
+        KeyCode::Char('q') => return Ok(Action::Quit),
+        KeyCode::Esc => return Ok(Action::Back),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(Action::Quit);
         }
@@ -183,9 +191,14 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
             Span::raw(" space ").reversed().bold(),
             Span::raw(" show answer").bold(),
         ]),
-        None => Line::from(" q quit").bold(),
+        None => Line::from(vec![
+            Span::raw(" "),
+            Span::raw(" esc ").reversed().bold(),
+            Span::raw(" back to decks").bold(),
+        ]),
     };
-    let mut secondary = vec![Span::raw(" u undo   s suspend   b bury   f flag   q quit").dim()];
+    let mut secondary =
+        vec![Span::raw(" u undo   s suspend   b bury   f flag   esc decks   q quit").dim()];
     if let Some(flag) = reviewer.current.as_ref().map(|c| c.flag).filter(|&f| f > 0) {
         secondary.push(Span::raw("   flag: ").dim());
         secondary.push(Span::raw(flag_name(flag)).fg(flag_color(flag)));

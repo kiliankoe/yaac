@@ -43,7 +43,7 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 
 ### Review
 
-`yaac review` opens a deck picker with today's counts, or goes straight into a deck named on the command line. The screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
+`yaac review` opens a deck picker with today's counts, or goes straight into a deck named on the command line. In the picker, `/` filters decks by name, `s` runs a normal and media sync without leaving the screen (a full sync is left to `yaac sync`, where the direction is confirmed), enter starts reviewing, and `q` quits. The review screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
 
 | Key          | Action                                                                  |
 | ------------ | ----------------------------------------------------------------------- |
@@ -53,7 +53,8 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 | s            | suspend the card                                                        |
 | b            | bury the card until tomorrow                                            |
 | f            | cycle the card's flag colour                                            |
-| q, esc       | quit; the session summary is printed afterwards                         |
+| esc          | back to the deck list, with refreshed counts                            |
+| q            | quit; the session summary is printed afterwards                         |
 
 Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text: formatting, lists, and cloze deletions are kept, images and audio appear as labels until image support lands.
 

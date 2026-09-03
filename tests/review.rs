@@ -163,3 +163,21 @@ fn the_screen_centers_the_card_and_colors_the_answers() {
     assert_eq!(color_of("Easy"), EASY);
     assert_ne!(AGAIN, Color::Reset);
 }
+
+#[test]
+fn esc_goes_back_to_the_deck_list_and_q_quits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    add_basic(&path, "cuatro", "four");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+
+    assert_eq!(
+        review::handle(&mut reviewer, KeyEvent::from(KeyCode::Esc)).unwrap(),
+        review::Action::Back
+    );
+    assert_eq!(
+        review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char('q'))).unwrap(),
+        review::Action::Quit
+    );
+}
