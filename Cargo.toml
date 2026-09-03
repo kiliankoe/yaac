@@ -8,8 +8,9 @@ license = "AGPL-3.0-or-later"
 publish = false
 
 [dependencies]
-# Pinned to the installed Anki desktop version; bump together with it.
-anki = { git = "https://github.com/ankitects/anki", tag = "26.08.1" }
+# Pinned to the installed Anki desktop version; bump together with it. rslib has no
+# TLS backend by default; without one every HTTPS request (AnkiWeb) fails.
+anki = { git = "https://github.com/ankitects/anki", tag = "26.08.1", features = ["rustls"] }
 anki_proto = { git = "https://github.com/ankitects/anki", tag = "26.08.1" }
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "env"] }

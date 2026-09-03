@@ -89,6 +89,7 @@ Notes:
 
 - `anki` (rslib) is a git dependency pinned to the tag of the installed Anki desktop version. Bump the tag when upgrading Anki and expect API changes.
 - `tokio` is a direct dependency only to enable its `io-util` feature; rslib relies on feature unification from Anki's workspace and does not compile without it.
+- rslib has no TLS backend unless a feature asks for one, and without it every HTTPS request fails with a bare network error. yaac enables its `rustls` feature, which needs no system libraries.
 - The first build clones the Anki repository and compiles rslib, which takes a few minutes.
 - Tests never touch a real profile: they create throwaway collections through rslib and drive the built binary.
 
