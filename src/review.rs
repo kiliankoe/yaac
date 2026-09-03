@@ -35,6 +35,8 @@ pub struct Current {
     pub kind: Kind,
     pub question: String,
     pub answer: String,
+    /// The notetype's stylesheet, for alignment and text styling.
+    pub css: String,
     /// Next-interval descriptions for Again, Hard, Good, Easy, e.g. "<1m", "4d".
     pub labels: [String; 4],
     pub flag: u32,
@@ -114,6 +116,7 @@ impl<'a> Reviewer<'a> {
                     },
                     question: nodes_to_html(&rendered.qnodes, false),
                     answer: nodes_to_html(&rendered.anodes, true),
+                    css: rendered.css,
                     labels,
                     flag: proto.flags,
                     revealed: false,

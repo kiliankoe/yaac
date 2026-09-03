@@ -117,6 +117,7 @@ Notes:
 - rslib has no TLS backend unless a feature asks for one, and without it every HTTPS request fails with a bare network error. yaac enables its `rustls` feature, which needs no system libraries.
 - The first build clones the Anki repository and compiles rslib, which takes a few minutes.
 - Tests never touch a real profile: they create throwaway collections through rslib and drive the built binary.
+- To see how a card comes out of the HTML and CSS converter without opening the TUI, `cargo run --example render_card -- PATH/collection.anki2 CARD_ID` prints both sides line by line with alignment and styles. Card ids are in `yaac show NOTE_ID --json`.
 
 ## License
 

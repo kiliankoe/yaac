@@ -1,10 +1,16 @@
 //! A small HTML-to-styled-lines converter for card content. Cards are simple HTML
 //! (formatting, line breaks, lists, images, cloze spans), so a hand-written tokenizer
-//! covers what matters without pulling in a full parser.
+//! covers what matters without pulling in a full parser. Styling comes from browser
+//! defaults for the common tags, the notetype's stylesheet, and inline `style`.
+
+use std::path::Path;
 
 use anki::template::RenderedNode;
+use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+
+use crate::render::css::{Decl, ElementRef, Stylesheet};
 
 /// Joins rslib's rendered nodes into HTML. Filters rslib leaves to the frontend get
 /// terminal equivalents: a type-answer field is hidden on the question side, hints are
@@ -32,11 +38,11 @@ pub fn nodes_to_html(nodes: &[RenderedNode], answer_side: bool) -> String {
     html
 }
 
-/// Renders HTML to lines with inline styling. Whitespace collapses like a browser's,
-/// block elements end lines without adding blank ones, and `<br>` runs never produce
-/// more than one blank line.
-pub fn html_to_lines(html: &str) -> Vec<Line<'static>> {
-    let mut out = Builder::default();
+/// Renders HTML to lines with inline styling and per-line alignment. Whitespace
+/// collapses like a browser's, block elements end lines without adding blank ones, and
+/// `<br>` runs never produce more than one blank line.
+pub fn html_to_lines(html: &str, sheet: &Stylesheet) -> Vec<Line<'static>> {
+    let mut out = Builder::new(sheet);
     let mut rest = html;
     while !rest.is_empty() {
         if let Some(after) = rest.strip_prefix('<') {
@@ -56,10 +62,7 @@ pub fn html_to_lines(html: &str) -> Vec<Line<'static>> {
             rest = &after[consumed..];
         } else if let Some(after) = rest.strip_prefix("[sound:") {
             let end = after.find(']').unwrap_or(after.len());
-            out.styled(
-                &format!("[audio: {}]", &after[..end]),
-                Style::new().fg(Color::Cyan),
-            );
+            out.label(&format!("[audio: {}]", &after[..end]));
             rest = after.get(end + 1..).unwrap_or("");
         } else {
             let end = rest.find(['<', '&', '[']).unwrap_or(rest.len());
@@ -119,19 +122,86 @@ fn decode_entity(s: &str) -> (String, usize) {
     }
 }
 
-#[derive(Default)]
-struct Builder {
+const BLOCK_TAGS: &[&str] = &[
+    "p",
+    "div",
+    "tr",
+    "table",
+    "blockquote",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "section",
+    "article",
+    "header",
+    "footer",
+];
+
+/// An open element: what the stylesheet needs to match it, and what text inside it
+/// looks like.
+struct Element {
+    tag: String,
+    classes: Vec<String>,
+    id: Option<String>,
+    style: Style,
+    /// Own `text-align`; None inherits from the enclosing block.
+    align: Option<Alignment>,
+    hidden: bool,
+}
+
+struct Builder<'s> {
+    sheet: &'s Stylesheet,
     lines: Vec<Line<'static>>,
     current: Vec<Span<'static>>,
-    style: Style,
-    stack: Vec<Style>,
+    elements: Vec<Element>,
     /// Pending whitespace collapses to one space, and never starts a line.
     space_pending: bool,
     list_depth: usize,
 }
 
-impl Builder {
+impl<'s> Builder<'s> {
+    fn new(sheet: &'s Stylesheet) -> Self {
+        let mut builder = Self {
+            sheet,
+            lines: Vec::new(),
+            current: Vec::new(),
+            elements: Vec::new(),
+            space_pending: false,
+            list_depth: 0,
+        };
+        // Anki wraps every card in `<div class="card">`. Its alignment and colours
+        // assume a white page and the screen already centers, so only text styling
+        // (weight, size) is taken from it.
+        builder.open("div", "class=\"card\"");
+        if let Some(root) = builder.elements.first_mut() {
+            root.align = None;
+            root.style.fg = None;
+        }
+        builder
+    }
+
+    fn style(&self) -> Style {
+        self.elements.last().map(|e| e.style).unwrap_or_default()
+    }
+
+    fn hidden(&self) -> bool {
+        self.elements.last().is_some_and(|e| e.hidden)
+    }
+
+    fn alignment(&self) -> Option<Alignment> {
+        self.elements.iter().rev().find_map(|e| e.align)
+    }
+
     fn text(&mut self, text: &str) {
+        if self.hidden() {
+            return;
+        }
         for c in text.chars() {
             if c.is_whitespace() && c != '\u{a0}' {
                 self.space_pending = true;
@@ -151,20 +221,18 @@ impl Builder {
         self.space_pending = false;
     }
 
-    fn styled(&mut self, text: &str, style: Style) {
-        self.flush_space();
-        let saved = self.style;
-        self.style = style;
+    /// Media placeholders, in a colour of their own.
+    fn label(&mut self, text: &str) {
+        self.open("span", "style=\"color: cyan\"");
         self.text(text);
-        self.style = saved;
+        self.close("span");
     }
 
     fn push(&mut self, text: &str) {
+        let style = self.style();
         match self.current.last_mut() {
-            Some(last) if last.style == self.style => last.content.to_mut().push_str(text),
-            _ => self
-                .current
-                .push(Span::styled(text.to_string(), self.style)),
+            Some(last) if last.style == style => last.content.to_mut().push_str(text),
+            _ => self.current.push(Span::styled(text.to_string(), style)),
         }
     }
 
@@ -182,71 +250,108 @@ impl Builder {
             ("script", false) => return Some("</script>"),
             ("br", _) => self.newline(),
             ("hr", false) => self.rule(),
-            ("p" | "div" | "tr" | "table" | "blockquote", _) => self.block_break(),
-            ("h1" | "h2" | "h3" | "h4" | "h5" | "h6", false) => {
-                self.block_break();
-                self.push_style(Style::new().add_modifier(Modifier::BOLD));
-            }
-            ("h1" | "h2" | "h3" | "h4" | "h5" | "h6", true) => {
-                self.pop_style();
-                self.block_break();
-            }
-            ("ul" | "ol", false) => {
-                self.list_depth += 1;
-                self.block_break();
-            }
-            ("ul" | "ol", true) => {
-                self.list_depth = self.list_depth.saturating_sub(1);
-                self.block_break();
-            }
-            ("li", false) => {
-                self.block_break();
-                let indent = "  ".repeat(self.list_depth.saturating_sub(1));
-                self.push(&format!("{indent}• "));
-            }
-            ("li", true) => self.block_break(),
-            ("td" | "th", true) => self.text(" "),
-            ("b" | "strong", false) => self.push_style(Style::new().add_modifier(Modifier::BOLD)),
-            ("i" | "em", false) => self.push_style(Style::new().add_modifier(Modifier::ITALIC)),
-            ("u", false) => self.push_style(Style::new().add_modifier(Modifier::UNDERLINED)),
-            ("s" | "del" | "strike", false) => {
-                self.push_style(Style::new().add_modifier(Modifier::CROSSED_OUT))
-            }
-            ("code" | "pre" | "kbd", false) => self.push_style(Style::new().fg(Color::Yellow)),
-            ("span" | "font" | "a", false) => {
-                let is_cloze = attr(body, "class")
-                    .is_some_and(|class| class.split_whitespace().any(|c| c == "cloze"));
-                let style = if is_cloze {
-                    Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new()
-                };
-                self.push_style(style);
-            }
-            (
-                "b" | "strong" | "i" | "em" | "u" | "s" | "del" | "strike" | "code" | "pre" | "kbd"
-                | "span" | "font" | "a",
-                true,
-            ) => self.pop_style(),
             ("img", false) => {
-                let name = attr(body, "src").unwrap_or_default();
-                self.styled(&format!("[image: {name}]"), Style::new().fg(Color::Cyan));
+                let src = attr(body, "src").unwrap_or_default();
+                let name = Path::new(src)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(src);
+                self.label(&format!("[image: {name}]"));
             }
-            _ => {}
+            ("td" | "th", true) => self.text(" "),
+            (_, false) => self.open(&name, body),
+            (_, true) => self.close(&name),
         }
         None
     }
 
-    fn push_style(&mut self, extra: Style) {
-        self.flush_space();
-        self.stack.push(self.style);
-        self.style = self.style.patch(extra);
+    fn open(&mut self, tag: &str, body: &str) {
+        // Whitespace before a block vanishes; before an inline element it belongs to
+        // the enclosing style.
+        if BLOCK_TAGS.contains(&tag) {
+            self.block_break();
+        } else {
+            self.flush_space();
+        }
+        let classes: Vec<String> = attr(body, "class")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let id = attr(body, "id").map(str::to_ascii_lowercase);
+
+        let builtin = builtin_decl(tag, &classes);
+        let sheet_decl = {
+            let class_refs: Vec<Vec<&str>> = self
+                .elements
+                .iter()
+                .map(|e| e.classes.iter().map(String::as_str).collect())
+                .chain(std::iter::once(
+                    classes.iter().map(String::as_str).collect(),
+                ))
+                .collect();
+            let chain: Vec<ElementRef<'_>> = self
+                .elements
+                .iter()
+                .zip(&class_refs)
+                .map(|(e, classes)| ElementRef {
+                    tag: &e.tag,
+                    classes,
+                    id: e.id.as_deref(),
+                })
+                .chain(std::iter::once(ElementRef {
+                    tag,
+                    classes: class_refs.last().expect("own classes"),
+                    id: id.as_deref(),
+                }))
+                .collect();
+            self.sheet.declaration_for(&chain)
+        };
+        let inline = attr(body, "style").map(Decl::parse).unwrap_or_default();
+
+        let parent = self.elements.last();
+        let mut style = parent.map(|e| e.style).unwrap_or_default();
+        for decl in [&builtin, &sheet_decl, &inline] {
+            style = decl.apply(style);
+        }
+        let hidden = parent.is_some_and(|e| e.hidden) || sheet_decl.hidden || inline.hidden;
+        let align = inline.align.or(sheet_decl.align);
+
+        if tag == "ul" || tag == "ol" {
+            self.list_depth += 1;
+        }
+        self.elements.push(Element {
+            tag: tag.to_string(),
+            classes,
+            id,
+            style,
+            align,
+            hidden,
+        });
+        if tag == "li" {
+            let indent = "  ".repeat(self.list_depth.saturating_sub(1));
+            self.push(&format!("{indent}• "));
+        }
     }
 
-    fn pop_style(&mut self) {
-        self.flush_space();
-        if let Some(style) = self.stack.pop() {
-            self.style = style;
+    /// Closes the nearest open element with this name, tolerating unbalanced markup.
+    fn close(&mut self, tag: &str) {
+        let Some(pos) = self.elements.iter().rposition(|e| e.tag == tag) else {
+            return;
+        };
+        if pos == 0 {
+            return;
+        }
+        if BLOCK_TAGS.contains(&tag) {
+            self.block_break();
+        } else {
+            self.flush_space();
+        }
+        while self.elements.len() > pos {
+            let closed = self.elements.pop().expect("element to close");
+            if closed.tag == "ul" || closed.tag == "ol" {
+                self.list_depth = self.list_depth.saturating_sub(1);
+            }
         }
     }
 
@@ -261,7 +366,10 @@ impl Builder {
 
     fn newline(&mut self) {
         self.space_pending = false;
-        let line = Line::from(std::mem::take(&mut self.current));
+        let mut line = Line::from(std::mem::take(&mut self.current));
+        if let Some(alignment) = self.alignment() {
+            line = line.alignment(alignment);
+        }
         let blank = line.width() == 0;
         let last_blank = self.lines.last().is_some_and(|l| l.width() == 0);
         if !(blank && (last_blank || self.lines.is_empty())) {
@@ -284,6 +392,29 @@ impl Builder {
         }
         self.lines
     }
+}
+
+/// What a browser does with a tag before any stylesheet is involved.
+fn builtin_decl(tag: &str, classes: &[String]) -> Decl {
+    let mut decl = Decl::default();
+    match tag {
+        "b" | "strong" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => decl.add |= Modifier::BOLD,
+        "i" | "em" => decl.add |= Modifier::ITALIC,
+        "u" => decl.add |= Modifier::UNDERLINED,
+        "s" | "del" | "strike" => decl.add |= Modifier::CROSSED_OUT,
+        "code" | "pre" | "kbd" => decl.fg = Some(Color::Yellow),
+        "a" => {
+            decl.fg = Some(Color::Blue);
+            decl.add |= Modifier::UNDERLINED;
+        }
+        "small" | "sub" | "sup" => decl.add |= Modifier::DIM,
+        _ => {}
+    }
+    if classes.iter().any(|c| c == "cloze") {
+        decl.fg = Some(Color::Blue);
+        decl.add |= Modifier::BOLD;
+    }
+    decl
 }
 
 /// Value of an attribute inside a tag body, quotes stripped.
@@ -311,7 +442,7 @@ mod tests {
     use super::*;
 
     fn plain(html: &str) -> Vec<String> {
-        html_to_lines(html)
+        html_to_lines(html, &Stylesheet::default())
             .iter()
             .map(|line| line.to_string())
             .collect()
@@ -335,7 +466,7 @@ mod tests {
 
     #[test]
     fn inline_styles_apply_and_nest() {
-        let lines = html_to_lines("<b>bold <i>both</i></b> plain");
+        let lines = html_to_lines("<b>bold <i>both</i></b> plain", &Stylesheet::default());
         let spans = &lines[0].spans;
         assert_eq!(spans[0].content, "bold ");
         assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
@@ -347,13 +478,14 @@ mod tests {
                 .contains(Modifier::BOLD | Modifier::ITALIC)
         );
         assert_eq!(spans[2].content, " plain");
-        assert_eq!(spans[2].style, Style::new());
+        assert_eq!(spans[2].style.add_modifier, Modifier::empty());
     }
 
     #[test]
     fn media_becomes_labels_and_cloze_is_highlighted() {
         let lines = html_to_lines(
-            r#"<img src="map.png"> [sound:hello.mp3] <span class="cloze">[...]</span>"#,
+            r#"<img src="/abs/path/map.png"> [sound:hello.mp3] <span class="cloze">[...]</span>"#,
+            &Stylesheet::default(),
         );
         assert_eq!(
             lines[0].to_string(),
@@ -376,6 +508,55 @@ mod tests {
         assert_eq!(
             plain("<ul><li>one</li><li>two</li></ul>"),
             ["• one", "• two"]
+        );
+    }
+
+    #[test]
+    fn stylesheet_aligns_shrinks_and_restyles_blocks() {
+        let sheet = Stylesheet::parse(
+            ".card { text-align: left; color: black; font-size: 20px }\n\
+             .source { font-size: 50%; text-align: right }\n\
+             .source a { text-decoration: none }",
+        );
+        let lines = html_to_lines(
+            "Jette<div class='source'><a href='x'>Julius</a></div>",
+            &sheet,
+        );
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].to_string(),
+            "Jette",
+            "no stray space before the block"
+        );
+        assert_eq!(lines[0].alignment, None, "card-level alignment is ignored");
+        assert_eq!(
+            lines[0].spans[0].style.fg, None,
+            "card-level colour is ignored"
+        );
+        let source = &lines[1];
+        assert_eq!(source.alignment, Some(Alignment::Right));
+        let link = &source.spans[0];
+        assert_eq!(link.content, "Julius");
+        assert_eq!(link.style.fg, Some(Color::Blue), "browser link colour");
+        assert!(link.style.add_modifier.contains(Modifier::DIM));
+        assert!(!link.style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn hidden_elements_and_inline_styles_are_honoured() {
+        let sheet = Stylesheet::parse(".secret { display: none }");
+        let lines = html_to_lines(
+            "a<span class=\"secret\">b</span>c<div style=\"text-align: right; font-weight: bold\">d</div>",
+            &sheet,
+        );
+        assert_eq!(lines[0].to_string(), "ac");
+        assert_eq!(lines[1].to_string(), "d");
+        assert_eq!(lines[1].alignment, Some(Alignment::Right));
+        assert!(
+            lines[1].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
         );
     }
 

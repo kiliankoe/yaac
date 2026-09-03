@@ -11,7 +11,7 @@ use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::render::html_to_lines;
+use crate::render::{Stylesheet, html_to_lines};
 use crate::review::{Kind, Reviewer};
 use crate::tui::{Terminal, next_key};
 
@@ -122,8 +122,15 @@ fn draw_status(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
 
 fn draw_card(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
     let lines = match &reviewer.current {
-        Some(current) if current.revealed => html_to_lines(&current.answer),
-        Some(current) => html_to_lines(&current.question),
+        Some(current) => {
+            let sheet = Stylesheet::parse(&current.css);
+            let html = if current.revealed {
+                &current.answer
+            } else {
+                &current.question
+            };
+            html_to_lines(html, &sheet)
+        }
         None => vec![
             Line::from("Congratulations!").bold(),
             Line::from("Nothing more to review in this deck right now."),
