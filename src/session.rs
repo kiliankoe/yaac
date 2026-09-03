@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
 
 use anki::collection::{Collection, CollectionBuilder};
 use anki::error::{AnkiError, DbErrorKind};
@@ -14,6 +15,8 @@ const COLLECTION_FILE: &str = "collection.anki2";
 pub struct Session {
     pub col: Collection,
     pub path: PathBuf,
+    /// Run a sync on close if anything changed; set from the config's `auto_sync`.
+    pub sync_on_close: bool,
 }
 
 #[derive(Debug)]
@@ -97,34 +100,59 @@ impl Session {
                 other => anyhow::anyhow!(other.message(&tr)),
             })
             .with_context(|| format!("opening {}", path.display()))?;
-        Ok(Self { col, path })
+        Ok(Self {
+            col,
+            path,
+            sync_on_close: config.auto_sync,
+        })
+    }
+
+    /// Takes a backup right now, regardless of the backup interval, and waits for it.
+    pub fn backup_now(&mut self) -> Result<()> {
+        if let Some(pending) = self.start_backup(true)? {
+            finish_backup(pending)?;
+        }
+        Ok(())
     }
 
     /// Closes the collection, first taking a backup the way the desktop does on exit:
     /// only if something changed, and not more often than the collection's backup
-    /// settings allow.
+    /// settings allow. With `auto_sync` on, changes are synced before closing; a failed
+    /// sync is reported but does not fail the command, the changes are safe locally.
     pub fn close(mut self) -> Result<()> {
-        let backup_dir = self.path.parent().map(|dir| dir.join("backups"));
-        let pending = match backup_dir {
-            Some(dir) => {
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                self.col.maybe_backup(dir, false).ctx("starting backup")?
+        let pending = self.start_backup(false)?;
+        let changed = self.col.changes_since_open().ctx("counting changes")? > 0;
+        if self.sync_on_close && changed {
+            if let Err(err) = crate::sync::auto_sync(&mut self) {
+                eprintln!("warning: auto sync failed: {err:#}");
             }
-            None => None,
-        };
+        }
         self.col
             .close(None)
             .ctx("closing collection")
             .with_context(|| format!("closing {}", self.path.display()))?;
         if let Some(handle) = pending {
-            handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("backup thread panicked"))?
-                .ctx("writing backup")?;
+            finish_backup(handle)?;
         }
         Ok(())
     }
+
+    fn start_backup(&mut self, force: bool) -> Result<Option<BackupHandle>> {
+        let Some(dir) = self.path.parent().map(|dir| dir.join("backups")) else {
+            return Ok(None);
+        };
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        self.col.maybe_backup(dir, force).ctx("starting backup")
+    }
+}
+
+type BackupHandle = JoinHandle<anki::error::Result<()>>;
+
+fn finish_backup(handle: BackupHandle) -> Result<()> {
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("backup thread panicked"))?
+        .ctx("writing backup")
 }
 
 fn discover_collection() -> Result<PathBuf> {

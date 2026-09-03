@@ -3,9 +3,12 @@ mod decks;
 mod delete;
 mod edit;
 mod info;
+mod login;
+mod logout;
 mod notetypes;
 mod search;
 mod show;
+mod sync;
 mod tag;
 
 use std::path::PathBuf;
@@ -58,6 +61,12 @@ enum Command {
     Decks,
     /// List notetypes with their fields and card templates.
     Notetypes,
+    /// Log in to AnkiWeb (or a self-hosted sync server) and store the session key.
+    Login(login::LoginArgs),
+    /// Forget the stored sync credentials.
+    Logout,
+    /// Sync the collection and media with AnkiWeb.
+    Sync(sync::SyncArgs),
 }
 
 /// Everything a command needs besides its own arguments.
@@ -91,6 +100,9 @@ pub fn run() -> ExitCode {
             Command::Delete(args) => delete::run(&ctx, args),
             Command::Decks => decks::run(&ctx),
             Command::Notetypes => notetypes::run(&ctx),
+            Command::Login(args) => login::run(&ctx, args),
+            Command::Logout => logout::run(&ctx),
+            Command::Sync(args) => sync::run(&ctx, args),
         }
     });
     match result {

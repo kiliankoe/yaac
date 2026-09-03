@@ -11,6 +11,11 @@ pub struct Config {
     pub collection: Option<PathBuf>,
     pub default_notetype: Option<String>,
     pub default_deck: Option<String>,
+    /// Sync after every command that changed something.
+    #[serde(default)]
+    pub auto_sync: bool,
+    /// Self-hosted sync server URL; absent means AnkiWeb.
+    pub sync_endpoint: Option<String>,
 }
 
 impl Config {

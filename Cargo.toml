@@ -15,9 +15,12 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Same major as rslib's, so the `Client` type lines up; TLS comes from rslib's features.
+reqwest = { version = "0.12", default-features = false }
+rpassword = "7.5"
 toml = "1.1"
-# Only here to enable io-util, which rslib needs but does not request itself.
-tokio = { version = "1.53", features = ["io-util"] }
+# io-util is what rslib needs but does not request itself; rt-multi-thread runs sync.
+tokio = { version = "1.53", features = ["io-util", "rt-multi-thread"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"

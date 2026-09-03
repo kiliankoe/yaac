@@ -24,6 +24,11 @@ yaac add --from-json notes.json            # one object or an array; "-" for std
 yaac edit NOTE_ID Back="better answer"     # unmentioned fields keep their content
 yaac tag add "todo review" NOTE_ID...      # or: yaac tag remove TAGS NOTE_ID...
 yaac delete NOTE_ID... [--yes]             # lists the notes, then asks; --yes when piped
+
+yaac login [USERNAME]                      # asks for the password; stores AnkiWeb's session key
+yaac sync                                  # collection and media; asks if a full sync is needed
+yaac sync --full-upload | --full-download  # pick a side explicitly; --yes skips the question
+yaac logout
 ```
 
 Every command accepts `--json` for machine-readable output. `--collection PATH` (or `YAAC_COLLECTION`) picks a specific `collection.anki2`; otherwise the config value is used, and failing that the single profile folder under the Anki data directory (`~/Library/Application Support/Anki2` on macOS, `~/.local/share/Anki2` on Linux, or `$ANKI_BASE`). yaac refuses to guess when there are several profiles and never creates a collection.
@@ -33,6 +38,14 @@ Field values are stored as HTML, exactly as given. `add` runs Anki's own checks:
 Ids for `show`, `tag`, and `delete` can be passed as arguments or read from stdin with `-`, so `yaac search ... --ids | yaac tag add later -` works.
 
 After any change yaac takes a backup into the profile's `backups/` folder, following the collection's own backup settings, the same way the desktop does on exit.
+
+### Sync
+
+`login` exchanges your AnkiWeb credentials for a session key and stores only the key, in `~/.local/share/yaac/auth.toml` (or `$XDG_DATA_HOME/yaac/auth.toml`, or `$YAAC_AUTH`), readable by you alone. When stdin is not a terminal the password is read from it, so scripts never put it on a command line. `--endpoint URL` or `sync_endpoint` in the config points at a self-hosted sync server.
+
+`sync` runs a normal sync, then a media sync. When the collections have diverged (first sync of a new profile, or after a schema change) Anki requires a full sync in one direction. yaac asks which side wins on a terminal and refuses when piped unless `--full-upload` or `--full-download` is given, together with `--yes`. A forced backup is taken before a full download.
+
+With `auto_sync = true` in the config, every command that changed something syncs before it exits. A failed auto sync is a warning, not an error; the change stays local and the next sync picks it up.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 collection locked.
 
@@ -59,6 +72,8 @@ Missing `notetype`, `deck`, or `tags` fall back to the flags, then to the config
 collection = "/Users/me/Library/Application Support/Anki2/User 1/collection.anki2"
 default_notetype = "Basic"
 default_deck = "Inbox"
+auto_sync = false
+sync_endpoint = "https://sync.example.org/"   # only for self-hosted servers
 ```
 
 All keys are optional.
