@@ -14,6 +14,7 @@ use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 
 use crate::render::image::load;
+use crate::render::occlusion::{self, Mask};
 use crate::tui::kitty::{self, MAX_ID, Placement};
 
 /// The same check ratatui-image uses to decide on tmux passthrough.
@@ -153,12 +154,18 @@ impl Images {
         (size.width > 0 && size.height > 0).then_some(size)
     }
 
-    /// The encoded image for exactly `size` cells, built (and for Kitty, transmitted)
-    /// once per size.
-    pub fn protocol(&mut self, src: &str, size: Size) -> Option<&Encoded> {
-        let key = (src.to_string(), size.width, size.height);
+    /// The encoded image for exactly `size` cells with these occlusion masks painted,
+    /// built (and for Kitty, transmitted) once per combination.
+    pub fn protocol(&mut self, src: &str, size: Size, masks: &[Mask]) -> Option<&Encoded> {
+        let mask_key = occlusion::key(masks);
+        let key = (format!("{src}#{mask_key}"), size.width, size.height);
         if !self.encoded.contains_key(&key) {
             let image = self.decoded(src).ok()?;
+            let image = if mask_key.is_empty() {
+                image
+            } else {
+                Arc::new(occlusion::apply(&image, masks))
+            };
             let encoded = if self.kitty() {
                 let font_size = self.picker.as_ref()?.font_size();
                 let fitted = Resize::Fit(None).resize(&image, font_size, size, None);
@@ -393,7 +400,7 @@ mod tests {
         let mut images = kitty_images(dir.path(), sink.clone());
         let size = images.size_for("blue.png", Size::new(10, 5)).expect("fits");
 
-        let placement = match images.protocol("blue.png", size) {
+        let placement = match images.protocol("blue.png", size, &[]) {
             Some(Encoded::Kitty(placement)) => placement.clone(),
             _ => panic!("expected a Kitty placement"),
         };
@@ -402,7 +409,7 @@ mod tests {
         let sent = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
         assert!(sent.contains("_Gq=2,i=1,a=T,U=1,f=100,"), "{sent:.40}");
 
-        images.protocol("blue.png", size);
+        images.protocol("blue.png", size, &[]);
         assert_eq!(images.next_kitty_id, 2, "cached, no second transmission");
         assert_eq!(sink.0.lock().unwrap().len(), sent.len());
 

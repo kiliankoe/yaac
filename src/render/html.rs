@@ -11,6 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::render::css::{Decl, ElementRef, Stylesheet};
+use crate::render::occlusion::Mask;
 
 /// Joins rslib's rendered nodes into HTML. Filters rslib leaves to the frontend get
 /// terminal equivalents: a type-answer field is hidden on the question side, hints are
@@ -46,6 +47,8 @@ pub enum Block {
     Image {
         src: String,
         align: Option<Alignment>,
+        /// Image occlusion shapes to paint over it, if the card has any.
+        masks: Vec<Mask>,
     },
 }
 
@@ -55,7 +58,7 @@ pub fn html_to_lines(html: &str, sheet: &Stylesheet<'_>) -> Vec<Line<'static>> {
     for block in html_to_blocks(html, sheet) {
         match block {
             Block::Text(text) => lines.extend(text),
-            Block::Image { src, align } => {
+            Block::Image { src, align, .. } => {
                 let mut line = Line::from(Span::styled(
                     image_label(&src),
                     Style::new().fg(Color::Cyan),
@@ -203,6 +206,8 @@ struct Builder<'s, 'c> {
     /// Pending whitespace collapses to one space, and never starts a line.
     space_pending: bool,
     list_depth: usize,
+    /// Occlusion shapes seen so far; they precede the image they belong to.
+    masks: Vec<Mask>,
 }
 
 impl<'s, 'c> Builder<'s, 'c> {
@@ -215,6 +220,7 @@ impl<'s, 'c> Builder<'s, 'c> {
             elements: Vec::new(),
             space_pending: false,
             list_depth: 0,
+            masks: Vec::new(),
         };
         // Anki wraps every card in `<div class="card">`. Its alignment and colours
         // assume a white page and the screen already centers, so only text styling
@@ -323,6 +329,14 @@ impl<'s, 'c> Builder<'s, 'c> {
             .find(|(name, _)| name == "class")
             .map(|(_, value)| value.split_whitespace().collect())
             .unwrap_or_default();
+        // Occlusion shapes sit in a hidden block, so they are collected regardless of
+        // visibility.
+        if let Some(mask) = classes
+            .first()
+            .and_then(|class| Mask::from_element(class, &attrs))
+        {
+            self.masks.push(mask);
+        }
 
         let builtin = builtin_decl(tag, &classes);
         let sheet_decl = {
@@ -417,6 +431,7 @@ impl<'s, 'c> Builder<'s, 'c> {
         self.blocks.push(Block::Image {
             src: src.to_string(),
             align: self.alignment(),
+            masks: self.masks.clone(),
         });
     }
 
@@ -578,7 +593,8 @@ mod tests {
             blocks[1],
             Block::Image {
                 src: "map.png".to_string(),
-                align: Some(Alignment::Right)
+                align: Some(Alignment::Right),
+                masks: Vec::new(),
             }
         );
         assert!(matches!(&blocks[2], Block::Text(lines) if lines[0].to_string() == "Answer"));
@@ -586,7 +602,8 @@ mod tests {
             blocks[3],
             Block::Image {
                 src: "flag.svg".to_string(),
-                align: None
+                align: None,
+                masks: Vec::new(),
             }
         );
     }
@@ -667,6 +684,30 @@ mod tests {
                 ("hidden".to_string(), String::new()),
                 ("data-x".to_string(), "1".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn occlusion_shapes_attach_to_the_image_even_from_a_hidden_block() {
+        use crate::render::occlusion::MaskKind;
+        let html = r#"<div style="display: none"><div class="cloze" data-ordinal="1" data-shape="rect" data-left=".7" data-top=".5" data-width=".1" data-height=".03" data-occludeInactive="1" ></div><br><div class="cloze-inactive" data-ordinal="2" data-shape="rect" data-left=".2" data-top=".3" data-width=".1" data-height=".03" data-occludeInactive="1" ></div></div><div id="image-occlusion-container"><img src="shot.png"><canvas id="c"></canvas></div>"#;
+        let blocks = html_to_blocks(html, &Stylesheet::default());
+        let Some(Block::Image { src, masks, .. }) = blocks
+            .iter()
+            .find(|block| matches!(block, Block::Image { .. }))
+        else {
+            panic!("no image block in {blocks:?}");
+        };
+        assert_eq!(src, "shot.png");
+        assert_eq!(masks.len(), 2);
+        assert_eq!(masks[0].kind, MaskKind::Hidden);
+        assert_eq!(masks[1].kind, MaskKind::Inactive);
+        assert!(masks.iter().all(|mask| mask.occlude_inactive));
+        assert!(
+            html_to_lines(html, &Stylesheet::default())
+                .iter()
+                .all(|line| !line.to_string().contains("cloze")),
+            "the hidden block stays hidden as text"
         );
     }
 

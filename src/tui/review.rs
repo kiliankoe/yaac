@@ -13,6 +13,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use ratatui_image::Image;
 
 use crate::render::html::image_label;
+use crate::render::occlusion::Mask;
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::review::{Kind, Reviewer};
 use crate::tui::images::{Encoded, Images};
@@ -148,6 +149,7 @@ enum Placed {
         src: String,
         size: Size,
         align: Option<Alignment>,
+        masks: Vec<Mask>,
     },
 }
 
@@ -198,7 +200,12 @@ fn draw_card(frame: &mut Frame, area: Rect, reviewer: &Reviewer, images: &mut Im
                 frame.render_widget(*paragraph, rect);
                 y += height;
             }
-            Placed::Image { src, size, align } => {
+            Placed::Image {
+                src,
+                size,
+                align,
+                masks,
+            } => {
                 let x = match align {
                     Some(Alignment::Left) => inner.x,
                     Some(Alignment::Right) => inner.x + inner.width - size.width,
@@ -210,7 +217,7 @@ fn draw_card(frame: &mut Frame, area: Rect, reviewer: &Reviewer, images: &mut Im
                     width: size.width,
                     height: size.height.min(remaining),
                 };
-                match images.protocol(&src, size) {
+                match images.protocol(&src, size, &masks) {
                     Some(Encoded::Native(protocol)) => {
                         frame.render_widget(Image::new(protocol), rect);
                         images.mark_placed(&src, rect, None);
@@ -263,10 +270,15 @@ fn place(blocks: Vec<Block>, inner: Rect, images: &mut Images) -> Vec<Placed> {
     for block in blocks {
         match block {
             Block::Text(lines) => push_text(&mut placed, lines),
-            Block::Image { src, align } => {
+            Block::Image { src, align, masks } => {
                 let available = Size::new(inner.width, per_image);
                 match images.size_for(&src, available) {
-                    Some(size) => placed.push(Placed::Image { src, size, align }),
+                    Some(size) => placed.push(Placed::Image {
+                        src,
+                        size,
+                        align,
+                        masks,
+                    }),
                     None => {
                         let mut label = image_label(&src);
                         if let Some(problem) = images.problem(&src) {

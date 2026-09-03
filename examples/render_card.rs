@@ -13,7 +13,7 @@ use anki::card::CardId;
 use anyhow::{Context, Result};
 use yaac::config::Config;
 use yaac::render::html::nodes_to_html;
-use yaac::render::{Block, Stylesheet, html_to_blocks, image};
+use yaac::render::{Block, Stylesheet, html_to_blocks, image, occlusion};
 use yaac::session::Session;
 
 fn main() -> Result<()> {
@@ -68,10 +68,25 @@ fn main() -> Result<()> {
                         );
                     }
                 }
-                Block::Image { src, align } => {
+                Block::Image { src, align, masks } => {
                     let started = std::time::Instant::now();
                     let outcome = match image::load(&media_dir, &src) {
-                        Ok(bitmap) => format!("{}x{} px", bitmap.width(), bitmap.height()),
+                        Ok(bitmap) => {
+                            let mut note = format!("{}x{} px", bitmap.width(), bitmap.height());
+                            if !masks.is_empty() {
+                                // Occlusion cards: write the painted result next to the
+                                // report so it can be looked at.
+                                let painted = occlusion::apply(&bitmap, &masks);
+                                let out = std::env::temp_dir().join(format!("yaac-{side}.png"));
+                                painted.save(&out)?;
+                                note.push_str(&format!(
+                                    ", {} masks painted into {}",
+                                    masks.len(),
+                                    out.display()
+                                ));
+                            }
+                            note
+                        }
                         Err(err) => format!("failed: {err:#}"),
                     };
                     println!(
