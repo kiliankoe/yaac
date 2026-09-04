@@ -77,6 +77,34 @@ impl CardView {
         }
         parts
     }
+
+    pub fn suspended(&self) -> bool {
+        self.queue == SUSPENDED
+    }
+}
+
+const SUSPENDED: &str = "suspended";
+
+impl NoteView {
+    /// The note carries Anki's "marked" tag.
+    pub fn marked(&self) -> bool {
+        is_marked(&self.tags)
+    }
+
+    /// The first flag any card has, in template order, or 0. Flags are per card,
+    /// but a note list can only show one.
+    pub fn flag(&self) -> u32 {
+        self.cards
+            .iter()
+            .map(|card| card.flag)
+            .find(|&flag| flag > 0)
+            .unwrap_or(0)
+    }
+
+    /// Every card is suspended, so the note never comes up in review.
+    pub fn suspended(&self) -> bool {
+        !self.cards.is_empty() && self.cards.iter().all(CardView::suspended)
+    }
 }
 
 /// Anki's "marked" state is this tag on the note; the desktop shows it as a star.
@@ -204,7 +232,7 @@ fn queue_name(queue: i32) -> &'static str {
         1 | 3 => "learning",
         2 => "review",
         4 => "preview",
-        -1 => "suspended",
+        -1 => SUSPENDED,
         -2 | -3 => "buried",
         _ => "unknown",
     }

@@ -103,7 +103,7 @@ LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, 
 
 ### Browse and edit
 
-`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images and formulas in fields are drawn the same way as in review.
+`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Each row shows the sort field on the left and the deck on the right, with a `⚑` in the flag's colour when a card of the note is flagged and a `★` when the note is marked sitting just before the deck name; a note whose cards are all suspended is dimmed. The line above the fields repeats these states next to the notetype and deck. Images and formulas in fields are drawn the same way as in review.
 
 | Key                          | Action                                                         |
 | ---------------------------- | -------------------------------------------------------------- |

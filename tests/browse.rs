@@ -1,11 +1,16 @@
 mod common;
 
+use std::path::Path;
+
+use anki::card::CardId;
 use anki::notes::NoteId;
+use anki_proto::scheduler::bury_or_suspend_cards_request::Mode as BuryOrSuspendMode;
 use common::{add_basic, fresh_collection, yaac_on};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier};
 use yaac::config::Config;
 use yaac::session::Session;
 use yaac::tui::browse::{self, BrowseAction, Browser};
@@ -29,13 +34,21 @@ fn ctrl(browser: &mut Browser, c: char) -> BrowseAction {
     browser.handle(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
 }
 
-fn screen(browser: &mut Browser, width: u16, height: u16, media: &std::path::Path) -> Vec<String> {
+fn draw(browser: &mut Browser, width: u16, height: u16, media: &Path) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut images = Images::disabled(media);
     terminal
         .draw(|frame| browser.draw(frame, &mut images))
         .unwrap();
-    rows(terminal.backend().buffer())
+    terminal.backend().buffer().clone()
+}
+
+fn screen(browser: &mut Browser, width: u16, height: u16, media: &Path) -> Vec<String> {
+    rows(&draw(browser, width, height, media))
+}
+
+fn first_card(session: &mut Session, nid: i64) -> CardId {
+    session.col.storage.all_cards_of_note(NoteId(nid)).unwrap()[0].id()
 }
 
 #[test]
@@ -391,4 +404,98 @@ fn esc_goes_back_and_q_quits_unless_typing() {
         "esc only leaves the search box"
     );
     assert_eq!(press(&mut browser, KeyCode::Esc), BrowseAction::Back);
+}
+
+#[test]
+fn the_list_marks_flagged_marked_and_suspended_notes_and_the_header_names_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let apple = add_basic(&path, "apple", "flagged");
+    let banana = add_basic(&path, "banana", "marked");
+    let cherry = add_basic(&path, "cherry", "suspended");
+    add_basic(&path, "date", "plain");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let card = first_card(&mut session, apple);
+    session.col.set_card_flag(&[card], 1).unwrap();
+    session
+        .col
+        .add_tags_to_notes(&[NoteId(banana)], "marked")
+        .unwrap();
+    let card = first_card(&mut session, cherry);
+    session
+        .col
+        .bury_or_suspend_cards(&[card], BuryOrSuspendMode::Suspend)
+        .unwrap();
+    let media = dir.path().join("collection.media");
+    let mut browser = Browser::new("deck:Default");
+    browse::search(&mut session, &mut browser).unwrap();
+
+    let buffer = draw(&mut browser, 100, 30, &media);
+    let lines = rows(&buffer);
+    let list_row = |name: &str| {
+        lines
+            .iter()
+            .position(|line| {
+                line.starts_with(&format!("▶ {name}")) || line.starts_with(&format!("  {name}"))
+            })
+            .unwrap_or_else(|| panic!("{name} in the list"))
+    };
+    let cell = |x: usize, y: usize| buffer[(x as u16, y as u16)].clone();
+    let (apple_row, banana_row, cherry_row, date_row) = (
+        list_row("apple"),
+        list_row("banana"),
+        list_row("cherry"),
+        list_row("date"),
+    );
+    let flag_x = lines[apple_row]
+        .chars()
+        .position(|c| c == '⚑')
+        .expect("a flag glyph on the flagged note");
+    assert_eq!(cell(flag_x, apple_row).fg, Color::Red);
+    let tail = |row: usize| lines[row].chars().skip(flag_x).collect::<String>();
+    assert_eq!(
+        tail(apple_row),
+        "⚑  Default",
+        "the marks hug the deck name rather than the front"
+    );
+    assert_eq!(
+        tail(banana_row),
+        " ★ Default",
+        "the star has its own cell after the flag's, so the two line up"
+    );
+    assert_eq!(cell(flag_x + 1, banana_row).fg, Color::Yellow);
+    assert!(
+        cell(2, cherry_row).modifier.contains(Modifier::DIM),
+        "a suspended note's name is dimmed"
+    );
+    assert!(!cell(2, apple_row).modifier.contains(Modifier::DIM));
+    assert_eq!(tail(date_row), "   Default", "nothing on a plain note");
+
+    // The column is there on a terminal too narrow for the deck column.
+    let lines = screen(&mut browser, 40, 20, &media);
+    let apple_row = lines
+        .iter()
+        .position(|line| line.starts_with("▶ apple"))
+        .unwrap();
+    assert!(lines[apple_row].contains('⚑'), "{}", lines[apple_row]);
+    assert!(!lines[apple_row].contains("Default"));
+
+    // The header names the state, next to the notetype and deck.
+    let header = |lines: &[String]| {
+        lines
+            .iter()
+            .find(|line| line.contains("Basic"))
+            .cloned()
+            .expect("the header line")
+    };
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(header(&lines).contains("⚑ red"), "{}", header(&lines));
+    press(&mut browser, KeyCode::Char('j'));
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(header(&lines).contains("★ marked"), "{}", header(&lines));
+    assert!(!header(&lines).contains('⚑'));
+    press(&mut browser, KeyCode::Char('j'));
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(header(&lines).contains("suspended"), "{}", header(&lines));
+    session.close().unwrap();
 }

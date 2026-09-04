@@ -17,11 +17,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as Panel, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::editor::{self, Editor, Outcome};
-use crate::notes::{self, NoteView, truncate};
+use crate::notes::{self, NoteView, flag_name, truncate};
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::session::{AnkiResultExt, Session, anki_error};
 use crate::tui::images::Images;
-use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
+use crate::tui::{Terminal, blocks, flag_color, is_ctrl_c, next_key, overlay};
 
 const KEYS: &[(&str, &str)] = &[
     ("/", "type a search; enter or esc leaves the box"),
@@ -373,28 +373,53 @@ impl Browser {
     }
 }
 
+/// Sort field on the left; on the right the deck, with the flag and the mark in two
+/// cells directly before its name, where the eye lands when scanning the deck column.
+/// A suspended note is dimmed, the terminal's stand-in for the desktop's yellow row.
+/// A narrow terminal loses the deck, not the marks.
 fn note_item(note: &NoteView, width: usize) -> ListItem<'static> {
     let deck_width = if width >= 50 { 18 } else { 0 };
-    let name_width = width.saturating_sub(deck_width).max(1);
+    // A space, the two mark cells, and another space before the deck when it is shown.
+    let marks_width = if deck_width > 0 { 4 } else { 3 };
+    let name_width = width.saturating_sub(marks_width + deck_width).max(1);
     let name = if note.sort_field.is_empty() {
         "(empty)"
     } else {
         &note.sort_field
     };
-    let mut spans = vec![Span::raw(format!(
-        " {:<name_width$}",
-        truncate(name, name_width)
-    ))];
+    let mut name = Span::raw(format!(" {:<name_width$}", truncate(name, name_width)));
+    if note.suspended() {
+        name = name.dim();
+    }
+    let flag = note.flag();
+    let flag = if flag > 0 {
+        Span::raw("⚑").fg(flag_color(flag))
+    } else {
+        Span::raw(" ")
+    };
+    let mark = if note.marked() {
+        Span::raw("★").fg(Color::Yellow)
+    } else {
+        Span::raw(" ")
+    };
+    let mut spans = Vec::with_capacity(6);
+    spans.push(name);
     if deck_width > 0 {
+        // Right-align the deck by hand so the marks can carry their own colours.
         let deck = note.deck.rsplit("::").next().unwrap_or(&note.deck);
-        spans.push(Span::raw(format!("{:>deck_width$}", truncate(deck, deck_width))).dim());
+        let deck = truncate(deck, deck_width);
+        let pad = deck_width + 1 - deck.chars().count();
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.extend([flag, mark, Span::raw(" "), Span::raw(deck).dim()]);
+    } else {
+        spans.extend([Span::raw(" "), flag, mark]);
     }
     ListItem::new(Line::from(spans))
 }
 
-/// Notetype, deck, and tags on top, then every field under its name, then the cards.
-/// Fields render like cards do, so formatting and images show, but without the
-/// notetype's stylesheet, which targets card templates rather than field content.
+/// Notetype, deck, flag, mark, and tags on top, then every field under its name, then
+/// the cards. Fields render like cards do, so formatting and images show, but without
+/// the notetype's stylesheet, which targets card templates rather than field content.
 fn detail_blocks(note: &NoteView) -> Vec<Block> {
     let sheet = Stylesheet::parse("");
     let heading = |text: &str| {
@@ -408,6 +433,19 @@ fn detail_blocks(note: &NoteView) -> Vec<Block> {
         Span::raw("  "),
         Span::raw(note.deck.clone()).dim(),
     ];
+    let flag = note.flag();
+    if flag > 0 {
+        header.push(Span::raw("  "));
+        header.push(Span::raw(format!("⚑ {}", flag_name(flag))).fg(flag_color(flag)));
+    }
+    if note.marked() {
+        header.push(Span::raw("  "));
+        header.push(Span::raw("★ marked").fg(Color::Yellow));
+    }
+    if note.suspended() {
+        header.push(Span::raw("  "));
+        header.push(Span::raw("suspended").dim());
+    }
     if !note.tags.is_empty() {
         header.push(Span::raw("  "));
         header.push(Span::raw(note.tags.join(" ")).fg(Color::Yellow));

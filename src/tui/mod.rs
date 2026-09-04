@@ -16,6 +16,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::DefaultTerminal;
+use ratatui::style::Color;
 
 /// Raw mode and the alternate screen, undone on drop so errors and early returns leave
 /// the shell usable.
@@ -74,4 +75,18 @@ pub fn next_key(timeout: Duration) -> Result<Option<KeyEvent>> {
 /// Ctrl-c quits every screen, whatever else is going on.
 pub fn is_ctrl_c(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Terminal colours for Anki's seven flags; 0 is no flag.
+pub fn flag_color(flag: u32) -> Color {
+    match flag {
+        1 => Color::Red,
+        2 => Color::Rgb(255, 140, 0),
+        3 => Color::Green,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::Rgb(160, 32, 240),
+        _ => Color::Reset,
+    }
 }

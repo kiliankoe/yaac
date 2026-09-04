@@ -16,7 +16,7 @@ use crate::notes::flag_name;
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::review::{Kind, Reviewer};
 use crate::tui::images::Images;
-use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
+use crate::tui::{Terminal, blocks, flag_color, is_ctrl_c, next_key, overlay};
 
 pub const AGAIN: Color = Color::Red;
 pub const HARD: Color = Color::Yellow;
@@ -262,8 +262,8 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer, status: Opti
     let mut secondary =
         vec![Span::raw(" u undo   s suspend   b bury   f flag   m mark   e edit   ? help").dim()];
     if let Some(flag) = reviewer.current.as_ref().map(|c| c.flag).filter(|&f| f > 0) {
-        secondary.push(Span::raw("   flag: ").dim());
-        secondary.push(Span::raw(flag_name(flag)).fg(flag_color(flag)));
+        secondary.push(Span::raw("   "));
+        secondary.push(Span::raw(format!("⚑ {}", flag_name(flag))).fg(flag_color(flag)));
     }
     if reviewer.current.as_ref().is_some_and(|c| c.marked) {
         secondary.push(Span::raw("   ★ marked").fg(Color::Yellow));
@@ -275,17 +275,4 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer, status: Opti
         Paragraph::new(Text::from(vec![primary, Line::from(secondary)])),
         area,
     );
-}
-
-pub fn flag_color(flag: u32) -> Color {
-    match flag {
-        1 => Color::Red,
-        2 => Color::Rgb(255, 140, 0),
-        3 => Color::Green,
-        4 => Color::Blue,
-        5 => Color::Magenta,
-        6 => Color::Cyan,
-        7 => Color::Rgb(160, 32, 240),
-        _ => Color::Reset,
-    }
 }
