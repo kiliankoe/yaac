@@ -317,6 +317,21 @@ fn adding_from_the_editor_checks_the_note_like_the_cli_does() {
 }
 
 #[test]
+fn quitting_the_editor_untouched_aborts_the_add() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let notetype = session.col.get_notetype_by_name("Basic").unwrap().unwrap();
+    // `true` leaves the file as it was.
+    let editor = yaac::editor::Editor::new("true");
+    let added = yaac::editor::add_note(&mut session.col, DeckId(1), &notetype, &editor).unwrap();
+    assert_eq!(added, None);
+    let nids = session.col.search_notes_unordered("deck:*").unwrap();
+    assert!(nids.is_empty(), "nothing was added");
+    session.close().unwrap();
+}
+
+#[test]
 fn b_opens_browse_on_the_selected_deck() {
     use yaac::tui::browse::deck_query;
     let mut picker = Picker::new(rows(), Vec::new());

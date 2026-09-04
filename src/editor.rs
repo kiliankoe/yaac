@@ -7,6 +7,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anki::collection::Collection;
 use anki::decks::DeckId;
@@ -106,7 +107,8 @@ pub fn apply(col: &mut Collection, note: &mut Note, draft: &Draft) -> Result<()>
 /// Opens an empty note of the notetype in the editor and adds what comes back to the
 /// deck. Anki's checks run on every save: an empty first field or cloze markers that do
 /// not fit reopen the file with the problem on top, and so does a duplicate, once, so
-/// that saving again unchanged adds it anyway. `None` when the user emptied the file.
+/// that saving again unchanged adds it anyway. `None` when the user emptied the file or
+/// left it as it was.
 pub fn add_note(
     col: &mut Collection,
     deck: DeckId,
@@ -117,6 +119,10 @@ pub fn add_note(
     let description = format!("new {} note", notetype.name);
     let mut warned_about: Option<Draft> = None;
     let edited = edit_draft(&empty, &description, editor, &mut |draft| {
+        // Quitting without typing anything is an abort, not an empty first field.
+        if draft == &empty {
+            return Ok(());
+        }
         let note = draft.to_note(notetype)?;
         if notes::check_new_note(col, &note, &notetype.name)? == FieldsCheck::Duplicate
             && warned_about.as_ref() != Some(draft)
@@ -129,7 +135,7 @@ pub fn add_note(
         }
         Ok(())
     })?;
-    let Some(draft) = edited else {
+    let Some(draft) = edited.filter(|draft| draft != &empty) else {
         return Ok(None);
     };
     let mut note = draft.to_note(notetype)?;
@@ -146,7 +152,13 @@ pub fn edit_draft(
     editor: &Editor,
     validate: &mut dyn FnMut(&Draft) -> Result<()>,
 ) -> Result<Option<Draft>> {
-    let path = std::env::temp_dir().join(format!("yaac-edit-{}.md", std::process::id()));
+    // The process id alone is not unique enough: tests edit in parallel threads.
+    static EDITS: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "yaac-edit-{}-{}.md",
+        std::process::id(),
+        EDITS.fetch_add(1, Ordering::Relaxed)
+    ));
     let result = edit_file(draft, description, editor, &path, validate);
     // Best effort: a leftover file in the temp dir is harmless.
     let _ = std::fs::remove_file(&path);
