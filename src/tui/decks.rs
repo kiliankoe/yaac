@@ -2,7 +2,7 @@
 //! syncs on `s`, adds a note to the selected deck on `a`, and stays alive across
 //! review sessions so Esc from a review lands back here with fresh counts.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anki::decks::DeckId;
 use anyhow::Result;
@@ -33,6 +33,10 @@ const KEYS: &[(&str, &str)] = &[
     ("q", "quit"),
 ];
 
+/// How long a status message stays on screen before it clears itself, so a stale
+/// "synced" does not sit under the deck list for the rest of the session.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
+
 pub enum Choice {
     Deck(DeckId),
     /// Open the browse screen on the deck's notes.
@@ -60,7 +64,8 @@ pub struct Picker {
     filter: String,
     searching: bool,
     list: ListState,
-    status: Option<String>,
+    /// The status line message and when it was set; see [`STATUS_TIMEOUT`].
+    status: Option<(String, Instant)>,
     /// Notetype names offered by `a`, and the one used last (or the config's
     /// default), which the chooser starts on and `A` takes without asking.
     notetypes: Vec<String>,
@@ -106,7 +111,20 @@ impl Picker {
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
-        self.status = Some(status.into());
+        self.status = Some((status.into(), Instant::now()));
+    }
+
+    /// Drops a status message once it has been up long enough to read. The picker loop
+    /// calls this before every draw, which is often enough for the message to vanish on
+    /// its own without a key press.
+    pub fn expire_status(&mut self, now: Instant) {
+        let expired = self
+            .status
+            .as_ref()
+            .is_some_and(|(_, set_at)| now.duration_since(*set_at) >= STATUS_TIMEOUT);
+        if expired {
+            self.status = None;
+        }
     }
 
     /// The config's default notetype counts as used last until a note is added.
@@ -189,7 +207,7 @@ impl Picker {
                     return PickerAction::Continue;
                 };
                 if self.notetypes.is_empty() {
-                    self.status = Some("no notetypes to add a note with".to_string());
+                    self.set_status("no notetypes to add a note with");
                     return PickerAction::Continue;
                 }
                 if key.code == KeyCode::Char('A') {
@@ -324,7 +342,7 @@ impl Picker {
             ])
         };
         frame.render_widget(Paragraph::new(help_line), help);
-        if let Some(message) = &self.status {
+        if let Some((message, _)) = &self.status {
             frame.render_widget(Paragraph::new(format!(" {message}")).italic(), status);
         }
         if let Some((deck, list)) = &mut self.chooser {
@@ -397,6 +415,7 @@ fn deck_item(row: &DeckRow, name_width: usize) -> ListItem<'static> {
 /// the editor.
 pub fn pick(terminal: &mut Terminal, session: &mut Session, picker: &mut Picker) -> Result<Choice> {
     loop {
+        picker.expire_status(Instant::now());
         terminal.draw(|frame| picker.draw(frame))?;
         let Some(key) = next_key(Duration::from_millis(250))? else {
             continue;

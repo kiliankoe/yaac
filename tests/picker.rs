@@ -1,5 +1,7 @@
 mod common;
 
+use std::time::{Duration, Instant};
+
 use anki::decks::DeckId;
 use common::fresh_collection;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -343,4 +345,28 @@ fn b_opens_browse_on_the_selected_deck() {
     assert_eq!(deck_query("Spanish::Verbs"), "deck:Spanish::Verbs");
     assert_eq!(deck_query("Irregular verbs"), "\"deck:Irregular verbs\"");
     assert_eq!(deck_query("Say \"hi\""), "\"deck:Say \\\"hi\\\"\"");
+}
+
+#[test]
+fn a_status_message_clears_itself_after_a_few_moments() {
+    let mut picker = Picker::new(rows(), Vec::new());
+    picker.set_status("synced");
+    let now = Instant::now();
+
+    picker.expire_status(now);
+    assert!(status_line(&mut picker).contains("synced"), "still fresh");
+
+    picker.expire_status(now + Duration::from_secs(30));
+    assert!(
+        status_line(&mut picker).trim().is_empty(),
+        "the status line is empty again"
+    );
+}
+
+/// The last row of the picker, where status messages go.
+fn status_line(picker: &mut Picker) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+    terminal.draw(|frame| picker.draw(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..60).map(|x| buffer[(x, 9)].symbol()).collect()
 }
