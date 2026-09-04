@@ -105,6 +105,8 @@ LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, 
 
 `yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Each row shows the sort field on the left and the deck on the right, with a `⚑` in the flag's colour when a card of the note is flagged and a `★` when the note is marked sitting just before the deck name; a note whose cards are all suspended is dimmed. The line above the fields repeats these states next to the notetype and deck. Images and formulas in fields are drawn the same way as in review.
 
+`t` and `T` ask for tags on the bottom line, several separated by spaces. Tab replaces the word at the cursor with the next tag that starts with it, drawn from the whole collection when adding and from the note's own tags when removing, so a bare tab after `T` steps through what the note has. Enter applies, esc cancels. A note changed by any of these keys stays in the list until the search runs again, which enter does; a triage query like `tag:todo` therefore only lets go of a note once you say so, and the selection moves to the next one.
+
 | Key                          | Action                                                         |
 | ---------------------------- | -------------------------------------------------------------- |
 | /                            | focus the search box; enter or esc leaves it, ctrl-u clears it |
@@ -115,6 +117,8 @@ LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, 
 | s                            | suspend every card of the note, or unsuspend them when all are |
 | f                            | cycle the flag colour on every card of the note                |
 | m                            | mark or unmark the note (Anki's `marked` tag)                  |
+| t, T                         | add or remove tags, typed on the bottom line; tab completes    |
+| enter                        | run the search again, dropping notes that no longer match      |
 | u                            | undo the last change                                           |
 | r                            | re-transmit and redraw images                                  |
 | esc                          | back to the deck list when opened from it, otherwise quit      |

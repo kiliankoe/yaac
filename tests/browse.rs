@@ -13,7 +13,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 use yaac::config::Config;
 use yaac::session::Session;
-use yaac::tui::browse::{self, BrowseAction, Browser};
+use yaac::tui::browse::{self, BrowseAction, Browser, TagMode};
 use yaac::tui::images::Images;
 
 fn rows(buffer: &Buffer) -> Vec<String> {
@@ -646,5 +646,256 @@ fn s_f_and_m_act_on_every_card_of_the_note() {
         assert_eq!(press(&mut browser, KeyCode::Char(c)), BrowseAction::Search);
     }
     assert_eq!(browser.query(), "deck:Defaultsfm");
+    session.close().unwrap();
+}
+
+fn add_tagged(path: &Path, front: &str, tags: &str) -> NoteId {
+    let output = yaac_on(path)
+        .args([
+            "add", "-n", "Basic", "-d", "Default", "--json", "--tag", tags,
+        ])
+        .arg(format!("Front={front}"))
+        .arg("Back=x")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    NoteId(json(&output)[0]["id"].as_i64().unwrap())
+}
+
+fn tags_of(session: &mut Session, nid: NoteId) -> Vec<String> {
+    let mut tags = yaac::notes::get_note(&mut session.col, nid).unwrap().tags;
+    tags.sort();
+    tags
+}
+
+fn type_text(browser: &mut Browser, text: &str) {
+    for c in text.chars() {
+        assert_eq!(
+            press(browser, KeyCode::Char(c)),
+            BrowseAction::Continue,
+            "{c:?} goes into the prompt"
+        );
+    }
+}
+
+#[test]
+fn t_and_shift_t_prompt_for_tags_complete_them_and_apply_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let apple = add_tagged(&path, "apple", "fruit food fresh");
+    let banana = add_tagged(&path, "banana", "fruit");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let media = dir.path().join("collection.media");
+    let mut browser = Browser::new("deck:Default");
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('t')),
+        BrowseAction::Continue,
+        "nothing to tag before the search ran"
+    );
+    browse::search(&mut session, &mut browser).unwrap();
+    press(&mut browser, KeyCode::Char('j'));
+    assert_eq!(browser.selected().map(|note| note.id), Some(banana.0));
+    let bottom = |browser: &mut Browser| {
+        let lines = screen(browser, 100, 24, &media);
+        (lines[22].clone(), lines[23].clone())
+    };
+
+    // t asks for tags to add and completes them from the whole collection.
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('t')),
+        BrowseAction::TagPrompt(banana, TagMode::Add)
+    );
+    browse::prompt_tags(&mut session, &mut browser, banana, TagMode::Add).unwrap();
+    let (help, prompt) = bottom(&mut browser);
+    assert!(prompt.contains("add tags: ▏"), "{prompt}");
+    assert!(help.contains("tab complete"), "{help}");
+    type_text(&mut browser, "f");
+    let (_, prompt) = bottom(&mut browser);
+    assert!(
+        prompt.contains("f▏") && prompt.contains("food") && prompt.contains("fresh"),
+        "candidates for the word being typed: {prompt}"
+    );
+    assert_eq!(press(&mut browser, KeyCode::Tab), BrowseAction::Continue);
+    let (_, prompt) = bottom(&mut browser);
+    assert!(prompt.contains("add tags: food▏"), "{prompt}");
+    press(&mut browser, KeyCode::Tab);
+    assert!(bottom(&mut browser).1.contains("add tags: fresh▏"));
+    press(&mut browser, KeyCode::Tab);
+    assert!(bottom(&mut browser).1.contains("add tags: fruit▏"));
+    press(&mut browser, KeyCode::Tab);
+    assert!(
+        bottom(&mut browser).1.contains("add tags: food▏"),
+        "tab wraps around"
+    );
+    press(&mut browser, KeyCode::BackTab);
+    assert!(bottom(&mut browser).1.contains("add tags: fruit▏"));
+    press(&mut browser, KeyCode::BackTab);
+    press(&mut browser, KeyCode::BackTab);
+    assert!(bottom(&mut browser).1.contains("add tags: food▏"));
+    type_text(&mut browser, " fr");
+    press(&mut browser, KeyCode::Tab);
+    assert!(
+        bottom(&mut browser).1.contains("add tags: food fresh▏"),
+        "only the word at the cursor is completed"
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter),
+        BrowseAction::Tags(
+            banana,
+            TagMode::Add,
+            vec!["food".to_string(), "fresh".to_string()]
+        )
+    );
+    browse::apply_tags(
+        &mut session,
+        &mut browser,
+        banana,
+        TagMode::Add,
+        &["food".to_string(), "fresh".to_string()],
+    )
+    .unwrap();
+    assert_eq!(tags_of(&mut session, banana), ["food", "fresh", "fruit"]);
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Basic") && line.contains("fresh")),
+        "the header shows the new tags"
+    );
+    assert!(lines[29].contains("added 2 tag"), "{}", lines[29]);
+    browse::apply_tags(
+        &mut session,
+        &mut browser,
+        banana,
+        TagMode::Add,
+        &["fruit".to_string()],
+    )
+    .unwrap();
+    assert!(bottom(&mut browser).1.contains("already tagged"));
+
+    // T asks for tags to remove and completes from the note's own tags, so a bare
+    // tab cycles through them.
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('T')),
+        BrowseAction::TagPrompt(banana, TagMode::Remove)
+    );
+    browse::prompt_tags(&mut session, &mut browser, banana, TagMode::Remove).unwrap();
+    assert!(bottom(&mut browser).1.contains("remove tags: ▏"));
+    press(&mut browser, KeyCode::Tab);
+    assert!(bottom(&mut browser).1.contains("remove tags: food▏"));
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter),
+        BrowseAction::Tags(banana, TagMode::Remove, vec!["food".to_string()])
+    );
+    browse::apply_tags(
+        &mut session,
+        &mut browser,
+        banana,
+        TagMode::Remove,
+        &["food".to_string()],
+    )
+    .unwrap();
+    assert_eq!(tags_of(&mut session, banana), ["fresh", "fruit"]);
+    assert!(bottom(&mut browser).1.contains("removed 1 tag"));
+    browse::apply_tags(
+        &mut session,
+        &mut browser,
+        banana,
+        TagMode::Remove,
+        &["nothing".to_string()],
+    )
+    .unwrap();
+    assert!(bottom(&mut browser).1.contains("no such tag"));
+
+    // u undoes the last change, like everything else.
+    assert_eq!(press(&mut browser, KeyCode::Char('u')), BrowseAction::Undo);
+    session.col.undo().unwrap();
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(tags_of(&mut session, banana), ["food", "fresh", "fruit"]);
+
+    // Esc cancels, enter on an empty prompt just closes it, ctrl-u clears.
+    press(&mut browser, KeyCode::Char('t'));
+    browse::prompt_tags(&mut session, &mut browser, banana, TagMode::Add).unwrap();
+    type_text(&mut browser, "later");
+    assert_eq!(press(&mut browser, KeyCode::Esc), BrowseAction::Continue);
+    assert!(!bottom(&mut browser).1.contains("add tags"));
+    assert_eq!(tags_of(&mut session, banana), ["food", "fresh", "fruit"]);
+    press(&mut browser, KeyCode::Char('t'));
+    browse::prompt_tags(&mut session, &mut browser, banana, TagMode::Add).unwrap();
+    type_text(&mut browser, "later");
+    assert_eq!(ctrl(&mut browser, 'u'), BrowseAction::Continue);
+    assert!(bottom(&mut browser).1.contains("add tags: ▏"));
+    assert_eq!(press(&mut browser, KeyCode::Enter), BrowseAction::Continue);
+    assert!(!bottom(&mut browser).1.contains("add tags"));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('q')),
+        BrowseAction::Quit,
+        "the prompt is closed, keys are shortcuts again"
+    );
+
+    // The apple's tags are untouched throughout.
+    assert_eq!(tags_of(&mut session, apple), ["food", "fresh", "fruit"]);
+    press(&mut browser, KeyCode::Char('?'));
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(
+        lines.iter().any(|line| line.contains("add tags")),
+        "{lines:#?}"
+    );
+    press(&mut browser, KeyCode::Esc);
+
+    // While typing a search, t and T are part of the query.
+    press(&mut browser, KeyCode::Char('/'));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('t')),
+        BrowseAction::Search
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('T')),
+        BrowseAction::Search
+    );
+    assert_eq!(browser.query(), "deck:DefaulttT");
+    session.close().unwrap();
+}
+
+#[test]
+fn enter_runs_the_search_again_and_stays_near_the_selected_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let apple = add_tagged(&path, "apple", "todo");
+    let banana = add_tagged(&path, "banana", "todo");
+    let cherry = add_tagged(&path, "cherry", "todo");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut browser = Browser::new("tag:todo");
+    browse::search(&mut session, &mut browser).unwrap();
+    press(&mut browser, KeyCode::Char('j'));
+    assert_eq!(browser.selected().map(|note| note.id), Some(banana.0));
+
+    // The note stays listed after the change, until the search runs again.
+    browse::apply_tags(
+        &mut session,
+        &mut browser,
+        banana,
+        TagMode::Remove,
+        &["todo".to_string()],
+    )
+    .unwrap();
+    assert_eq!(browser.notes().len(), 3);
+    assert_eq!(press(&mut browser, KeyCode::Enter), BrowseAction::Rerun);
+    browse::rerun(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.notes().len(), 2);
+    assert_eq!(
+        browser.selected().map(|note| note.id),
+        Some(cherry.0),
+        "the selection moves to the note that took the place"
+    );
+    press(&mut browser, KeyCode::Char('k'));
+    browse::rerun(&mut session, &mut browser).unwrap();
+    assert_eq!(
+        browser.selected().map(|note| note.id),
+        Some(apple.0),
+        "a note still listed keeps the selection"
+    );
     session.close().unwrap();
 }

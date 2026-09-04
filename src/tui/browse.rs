@@ -1,6 +1,7 @@
 //! The browse screen: a search box on top, matching notes below it, the selected
 //! note's fields, tags, and cards under those. `e` opens the note in `$EDITOR`, `d`
-//! deletes it after asking, and `s`, `f`, and `m` suspend, flag, and mark it.
+//! deletes it after asking, `s`, `f`, and `m` suspend, flag, and mark it, and `t` and
+//! `T` ask for tags to add or remove on the bottom line.
 
 use std::time::Duration;
 
@@ -39,6 +40,12 @@ const KEYS: &[(&str, &str)] = &[
     ),
     ("f", "cycle the flag colour on the note's cards"),
     ("m", "mark or unmark the note"),
+    ("t", "add tags; tab completes from the collection's tags"),
+    ("T", "remove tags; tab completes from the note's own"),
+    (
+        "enter",
+        "run the search again, dropping notes that no longer match",
+    ),
     ("u", "undo the last change"),
     ("r", "re-send and redraw the images"),
     ("esc", "back to the decks when opened from there, else quit"),
@@ -60,6 +67,12 @@ pub enum BrowseAction {
     Flag(NoteId),
     /// Mark or unmark the note.
     Mark(NoteId),
+    /// Ask for tags to add to or remove from the note.
+    TagPrompt(NoteId, TagMode),
+    /// The tags the user entered at the prompt.
+    Tags(NoteId, TagMode, Vec<String>),
+    /// Run the query again unchanged.
+    Rerun,
     Undo,
     /// Re-send the images.
     Redraw,
@@ -78,6 +91,129 @@ pub enum Exit {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagMode {
+    Add,
+    Remove,
+}
+
+/// A question on the bottom line; it takes the keys until answered or dismissed.
+enum Prompt {
+    /// `d` was pressed; `y` deletes the note, any other key cancels.
+    ConfirmDelete {
+        nid: NoteId,
+        question: String,
+    },
+    Tags(TagPrompt),
+}
+
+/// Tags being typed, with tab completion over `candidates`.
+struct TagPrompt {
+    nid: NoteId,
+    mode: TagMode,
+    text: String,
+    /// Every tag in the collection when adding, the note's own when removing.
+    candidates: Vec<String>,
+    /// Tab is stepping through the matches for the word it started on.
+    cycle: Option<Cycle>,
+}
+
+struct Cycle {
+    matches: Vec<String>,
+    index: usize,
+}
+
+impl TagPrompt {
+    fn edit(&mut self, code: KeyCode, ctrl: bool) {
+        match code {
+            KeyCode::Tab => return self.step(1),
+            KeyCode::BackTab => return self.step(-1),
+            KeyCode::Backspace => {
+                self.text.pop();
+            }
+            KeyCode::Char('u') if ctrl => self.text.clear(),
+            KeyCode::Char(c) if !ctrl => self.text.push(c),
+            _ => {}
+        }
+        // Editing the text ends a cycle; the next tab starts from what is typed.
+        self.cycle = None;
+    }
+
+    /// The text before the word at the cursor, and that word: what follows the last
+    /// space or comma.
+    fn split(&self) -> (&str, &str) {
+        match self.text.rfind([' ', ',']) {
+            Some(i) => self.text.split_at(i + 1),
+            None => ("", &self.text),
+        }
+    }
+
+    /// Candidates starting with the word at the cursor, all of them when it is empty.
+    /// Case-insensitive, as tags are in Anki.
+    fn matches(&self) -> Vec<String> {
+        let stem = self.split().1.to_lowercase();
+        self.candidates
+            .iter()
+            .filter(|tag| tag.to_lowercase().starts_with(&stem))
+            .cloned()
+            .collect()
+    }
+
+    /// Replaces the word at the cursor with the next (or previous) match. The first
+    /// tab fixes the list of matches from the word as typed, so stepping on does not
+    /// narrow it to the completion just inserted.
+    fn step(&mut self, by: isize) {
+        let cycle = match self.cycle.take() {
+            Some(mut cycle) => {
+                let len = cycle.matches.len() as isize;
+                cycle.index = (cycle.index as isize + by).rem_euclid(len) as usize;
+                cycle
+            }
+            None => {
+                let matches = self.matches();
+                if matches.is_empty() {
+                    return;
+                }
+                let index = if by < 0 { matches.len() - 1 } else { 0 };
+                Cycle { matches, index }
+            }
+        };
+        let head = self.split().0.to_string();
+        self.text = format!("{head}{}", cycle.matches[cycle.index]);
+        self.cycle = Some(cycle);
+    }
+
+    /// The prompt as drawn: label, text, cursor, then the matches for the word at the
+    /// cursor, dim, with the one a cycle is on lit. Nothing is listed for an empty
+    /// word until tab is pressed, since that would be every tag there is.
+    fn line(&self) -> Line<'static> {
+        let label = match self.mode {
+            TagMode::Add => " add tags: ",
+            TagMode::Remove => " remove tags: ",
+        };
+        let mut spans = vec![
+            Span::raw(label).bold(),
+            Span::raw(self.text.clone()),
+            Span::raw("▏"),
+        ];
+        let (matches, current) = match &self.cycle {
+            Some(cycle) => (cycle.matches.clone(), Some(cycle.index)),
+            None if self.split().1.is_empty() => (Vec::new(), None),
+            None => (self.matches(), None),
+        };
+        for (i, tag) in matches.into_iter().enumerate() {
+            spans.push(Span::raw("  "));
+            let tag = Span::raw(tag);
+            spans.push(if current == Some(i) {
+                tag.bold()
+            } else {
+                tag.dim()
+            });
+        }
+        Line::from(spans)
+    }
+}
+
 pub struct Browser {
     query: String,
     /// Keys go into the search box rather than acting as shortcuts.
@@ -94,8 +230,7 @@ pub struct Browser {
     status: Option<String>,
     /// The `?` overlay is up.
     help: bool,
-    /// `d` was pressed on this note and the status line asks for a `y`.
-    confirming: Option<NoteId>,
+    prompt: Option<Prompt>,
 }
 
 impl Browser {
@@ -112,7 +247,7 @@ impl Browser {
             detail: (0, 0),
             status: None,
             help: false,
-            confirming: None,
+            prompt: None,
         }
     }
 
@@ -185,6 +320,18 @@ impl Browser {
         }
     }
 
+    /// Puts up the tag prompt for the note, completing from `candidates`.
+    pub fn open_tag_prompt(&mut self, nid: NoteId, mode: TagMode, candidates: Vec<String>) {
+        self.status = None;
+        self.prompt = Some(Prompt::Tags(TagPrompt {
+            nid,
+            mode,
+            text: String::new(),
+            candidates,
+            cycle: None,
+        }));
+    }
+
     pub fn handle(&mut self, key: KeyEvent) -> BrowseAction {
         if is_ctrl_c(key) {
             return BrowseAction::Quit;
@@ -194,12 +341,8 @@ impl Browser {
             self.help = false;
             return BrowseAction::Refresh;
         }
-        if let Some(nid) = self.confirming.take() {
-            self.status = None;
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
-                return BrowseAction::Delete(nid);
-            }
-            return BrowseAction::Continue;
+        if let Some(prompt) = self.prompt.take() {
+            return self.answer(prompt, key);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if self.typing {
@@ -239,18 +382,26 @@ impl Browser {
             KeyCode::Char('s') => return self.act_on_selected(BrowseAction::Suspend),
             KeyCode::Char('f') => return self.act_on_selected(BrowseAction::Flag),
             KeyCode::Char('m') => return self.act_on_selected(BrowseAction::Mark),
+            KeyCode::Char('t') => {
+                return self.act_on_selected(|nid| BrowseAction::TagPrompt(nid, TagMode::Add));
+            }
+            KeyCode::Char('T') => {
+                return self.act_on_selected(|nid| BrowseAction::TagPrompt(nid, TagMode::Remove));
+            }
+            KeyCode::Enter => return BrowseAction::Rerun,
             KeyCode::Char('r') => return BrowseAction::Redraw,
             KeyCode::Char('d') if ctrl => self.scroll_by(self.half_page()),
             KeyCode::Char('u') if ctrl => self.scroll_by(-self.half_page()),
             KeyCode::Char('d') => {
                 if let Some(note) = self.selected() {
-                    let prompt = format!(
+                    let question = format!(
                         "delete \"{}\" and its {} card(s)? y confirms, any other key cancels",
                         truncate(&note.sort_field, 40),
                         note.cards.len()
                     );
-                    self.confirming = Some(NoteId(note.id));
-                    self.status = Some(prompt);
+                    let nid = NoteId(note.id);
+                    self.status = None;
+                    self.prompt = Some(Prompt::ConfirmDelete { nid, question });
                 }
             }
             KeyCode::PageDown => self.scroll_by(self.half_page()),
@@ -261,6 +412,32 @@ impl Browser {
             KeyCode::Home | KeyCode::Char('g') => self.move_selection(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.move_selection(isize::MAX / 2),
             _ => {}
+        }
+        BrowseAction::Continue
+    }
+
+    /// A key while a prompt is up. The prompt has been taken out of `self` and goes
+    /// back unless the key answered or dismissed it.
+    fn answer(&mut self, prompt: Prompt, key: KeyEvent) -> BrowseAction {
+        match prompt {
+            Prompt::ConfirmDelete { nid, .. } => {
+                if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+                    return BrowseAction::Delete(nid);
+                }
+            }
+            Prompt::Tags(mut tags) => match key.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => {
+                    let entered = notes::split_tags(std::slice::from_ref(&tags.text));
+                    if !entered.is_empty() {
+                        return BrowseAction::Tags(tags.nid, tags.mode, entered);
+                    }
+                }
+                code => {
+                    tags.edit(code, key.modifiers.contains(KeyModifiers::CONTROL));
+                    self.prompt = Some(Prompt::Tags(tags));
+                }
+            },
         }
         BrowseAction::Continue
     }
@@ -310,22 +487,28 @@ impl Browser {
 
         let help_line = if self.typing {
             Line::from(" enter/esc done   ↑/↓ move   ctrl-u clear").dim()
+        } else if matches!(self.prompt, Some(Prompt::Tags(_))) {
+            Line::from(" enter apply   tab complete   esc cancel   ctrl-u clear").dim()
         } else {
-            // Scrolling and quitting are one `?` away; this has to fit 80 columns.
+            // Scrolling, quitting, and T are one `?` away; this has to fit 80 columns.
             Line::from(
-                " / search   e edit   d delete   s suspend   f flag   m mark   u undo   ? help",
+                " / search  e edit  d delete  s suspend  f flag  m mark  t tag  u undo  ? help",
             )
             .dim()
         };
         frame.render_widget(Paragraph::new(help_line), help);
-        if let Some(message) = &self.status {
-            let message = Paragraph::new(format!(" {message}"));
-            let message = if self.confirming.is_some() {
-                message.bold().fg(Color::Yellow)
-            } else {
-                message.italic()
-            };
-            frame.render_widget(message, status);
+        let bottom = match (&self.prompt, &self.status) {
+            (Some(Prompt::ConfirmDelete { question, .. }), _) => Some(
+                Paragraph::new(format!(" {question}"))
+                    .bold()
+                    .fg(Color::Yellow),
+            ),
+            (Some(Prompt::Tags(tags)), _) => Some(Paragraph::new(tags.line())),
+            (None, Some(message)) => Some(Paragraph::new(format!(" {message}")).italic()),
+            (None, None) => None,
+        };
+        if let Some(bottom) = bottom {
+            frame.render_widget(bottom, status);
         }
         if self.help {
             overlay::keys(frame, "Browse keys", KEYS);
@@ -515,14 +698,89 @@ pub fn deck_query(deck: &str) -> String {
 /// Deletes the note with its cards and lists the results again with the next note
 /// selected. Undoable with `u` while yaac runs; afterwards the deletion syncs.
 pub fn delete(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
-    let index = browser.list.selected().unwrap_or(0);
     let removed = session.col.remove_notes(&[nid]).ctx("deleting note")?;
-    search(session, browser)?;
-    browser.select_nearest(index);
+    rerun(session, browser)?;
     browser.set_status(format!(
         "deleted the note and its {} card(s); u undoes",
         removed.output
     ));
+    Ok(())
+}
+
+/// Runs the query again unchanged, after changes that may have taken notes out of
+/// it. The selection stays on its note, or moves to the one that took its place.
+pub fn rerun(session: &mut Session, browser: &mut Browser) -> Result<()> {
+    let index = browser.list.selected().unwrap_or(0);
+    let selected = browser.selected().map(|note| note.id);
+    search(session, browser)?;
+    if browser.selected().map(|note| note.id) != selected {
+        browser.select_nearest(index);
+    }
+    Ok(())
+}
+
+/// Puts up the tag prompt, completing from every tag in the collection when adding
+/// and from the note's own when removing.
+pub fn prompt_tags(
+    session: &mut Session,
+    browser: &mut Browser,
+    nid: NoteId,
+    mode: TagMode,
+) -> Result<()> {
+    let candidates = match mode {
+        TagMode::Add => {
+            let mut tags: Vec<String> = session
+                .col
+                .storage
+                .all_tags()
+                .ctx("reading tags")?
+                .into_iter()
+                .map(|tag| tag.name)
+                .collect();
+            tags.sort_by_key(|tag| tag.to_lowercase());
+            tags
+        }
+        TagMode::Remove => browser
+            .note(nid)
+            .map(|note| note.tags.clone())
+            .unwrap_or_default(),
+    };
+    browser.open_tag_prompt(nid, mode, candidates);
+    Ok(())
+}
+
+/// Adds or removes the tags and says how many of them actually changed the note,
+/// since Anki quietly skips tags it already has or never had.
+pub fn apply_tags(
+    session: &mut Session,
+    browser: &mut Browser,
+    nid: NoteId,
+    mode: TagMode,
+    tags: &[String],
+) -> Result<()> {
+    let Some(note) = browser.note(nid) else {
+        return Ok(());
+    };
+    let before = note.tags.len();
+    let joined = tags.join(" ");
+    match mode {
+        TagMode::Add => session
+            .col
+            .add_tags_to_notes(&[nid], &joined)
+            .ctx("adding tags")?,
+        TagMode::Remove => session
+            .col
+            .remove_tags_from_notes(&[nid], &joined)
+            .ctx("removing tags")?,
+    };
+    refresh_note(session, browser, nid)?;
+    let after = browser.note(nid).map_or(before, |note| note.tags.len());
+    browser.set_status(match mode {
+        TagMode::Add if after > before => format!("added {} tag(s)", after - before),
+        TagMode::Add => "already tagged".to_string(),
+        TagMode::Remove if before > after => format!("removed {} tag(s)", before - after),
+        TagMode::Remove => "no such tag".to_string(),
+    });
     Ok(())
 }
 
@@ -656,6 +914,9 @@ pub fn run(
             BrowseAction::Suspend(nid) => toggle_suspend(session, browser, nid)?,
             BrowseAction::Flag(nid) => cycle_flag(session, browser, nid)?,
             BrowseAction::Mark(nid) => toggle_mark(session, browser, nid)?,
+            BrowseAction::TagPrompt(nid, mode) => prompt_tags(session, browser, nid, mode)?,
+            BrowseAction::Tags(nid, mode, tags) => apply_tags(session, browser, nid, mode, &tags)?,
+            BrowseAction::Rerun => rerun(session, browser)?,
             BrowseAction::Undo => match session.col.undo() {
                 Ok(_) => {
                     search(session, browser)?;
