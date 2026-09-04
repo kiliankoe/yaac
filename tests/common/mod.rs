@@ -55,3 +55,30 @@ pub fn add_basic(collection: &Path, front: &str, back: &str) -> i64 {
         .clone();
     json(&output)[0]["id"].as_i64().expect("note id")
 }
+
+/// An editor that replaces the file with the next of `responses` on every call and
+/// keeps what it was given, for `seen_by_editor`.
+pub fn scripted_editor(dir: &Path, responses: &[&str]) -> yaac::editor::Editor {
+    let log = dir.join("editor-log");
+    std::fs::create_dir_all(&log).unwrap();
+    for (i, response) in responses.iter().enumerate() {
+        std::fs::write(log.join(format!("response-{}.md", i + 1)), response).unwrap();
+    }
+    let script = dir.join("editor.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "n=$(cat {log}/count 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {log}/count\n\
+             cp \"$1\" {log}/seen-$n.md\n\
+             cp {log}/response-$n.md \"$1\"\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    yaac::editor::Editor::new(format!("sh {}", script.display()))
+}
+
+/// The file the scripted editor was handed on its `n`th call.
+pub fn seen_by_editor(dir: &Path, n: usize) -> String {
+    std::fs::read_to_string(dir.join("editor-log").join(format!("seen-{n}.md"))).unwrap()
+}

@@ -5,13 +5,14 @@ pub mod browse;
 pub mod decks;
 pub mod images;
 pub mod kitty;
+pub mod overlay;
 pub mod review;
 
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::DefaultTerminal;
@@ -68,4 +69,9 @@ pub fn next_key(timeout: Duration) -> Result<Option<KeyEvent>> {
         Event::Key(key) if key.kind == KeyEventKind::Press => Ok(Some(key)),
         _ => Ok(None),
     }
+}
+
+/// Ctrl-c quits every screen, whatever else is going on.
+pub fn is_ctrl_c(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }

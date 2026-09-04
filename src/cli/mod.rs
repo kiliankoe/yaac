@@ -26,7 +26,8 @@ use crate::session::{Session, SessionError};
 #[command(
     name = "yaac",
     version,
-    about = "Terminal Anki client built on Anki's own backend"
+    about = "Terminal Anki client built on Anki's own backend",
+    after_help = "Without a command, yaac opens the review screen."
 )]
 struct Cli {
     /// Path to collection.anki2. Defaults to the config value, else the single profile
@@ -39,7 +40,7 @@ struct Cli {
     json: bool,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -69,7 +70,7 @@ enum Command {
     Logout,
     /// Sync the collection and media with AnkiWeb.
     Sync(sync::SyncArgs),
-    /// Review due cards in the terminal.
+    /// Review due cards in the terminal; also what a bare `yaac` does.
     Review(review::ReviewArgs),
     /// Search notes and edit them in the terminal.
     Browse(browse::BrowseArgs),
@@ -96,7 +97,10 @@ pub fn run() -> ExitCode {
             collection: cli.collection,
             json: cli.json,
         };
-        match cli.command {
+        let command = cli
+            .command
+            .unwrap_or_else(|| Command::Review(review::ReviewArgs::default()));
+        match command {
             Command::Info => info::run(&ctx),
             Command::Add(args) => add::run(&ctx, args),
             Command::Search(args) => search::run(&ctx, args),

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anki::scheduler::answering::Rating;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Stylize};
@@ -15,14 +15,27 @@ use crate::editor::Editor;
 use crate::notes::flag_name;
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::review::{Kind, Reviewer};
-use crate::tui::blocks;
 use crate::tui::images::Images;
-use crate::tui::{Terminal, next_key};
+use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
 
 pub const AGAIN: Color = Color::Red;
 pub const HARD: Color = Color::Yellow;
 pub const GOOD: Color = Color::Green;
 pub const EASY: Color = Color::Blue;
+
+const KEYS: &[(&str, &str)] = &[
+    ("space, enter", "show the answer"),
+    ("1 2 3 4", "Again, Hard, Good, Easy"),
+    ("u", "undo the last answer or change"),
+    ("s", "suspend the card"),
+    ("b", "bury the card until tomorrow"),
+    ("f", "cycle the card's flag colour"),
+    ("m", "mark or unmark the note"),
+    ("e", "edit the note in $EDITOR"),
+    ("r", "re-send and redraw the images"),
+    ("esc", "back to the deck list"),
+    ("q", "quit"),
+];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -41,13 +54,29 @@ pub fn run(
     images: &mut Images,
 ) -> Result<Action> {
     let mut status: Option<String> = None;
+    let mut help = false;
     loop {
-        terminal.draw(|frame| draw(frame, reviewer, images, status.as_deref()))?;
+        terminal.draw(|frame| {
+            draw(frame, reviewer, images, status.as_deref());
+            if help {
+                overlay::keys(frame, "Review keys", KEYS);
+            }
+        })?;
         images.end_frame();
         let Some(key) = next_key(Duration::from_millis(250))? else {
             continue;
         };
+        // The overlay swallows the key that closes it, except ctrl-c.
+        if help && !is_ctrl_c(key) {
+            help = false;
+            images.refresh();
+            continue;
+        }
         match key.code {
+            KeyCode::Char('?') => {
+                help = true;
+                continue;
+            }
             KeyCode::Char('r') => {
                 images.clear();
                 continue;
@@ -77,11 +106,9 @@ pub fn run(
 pub fn handle(reviewer: &mut Reviewer, key: KeyEvent) -> Result<Action> {
     let revealed = reviewer.current.as_ref().is_some_and(|c| c.revealed);
     match key.code {
+        _ if is_ctrl_c(key) => return Ok(Action::Quit),
         KeyCode::Char('q') => return Ok(Action::Quit),
         KeyCode::Esc => return Ok(Action::Back),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            return Ok(Action::Quit);
-        }
         KeyCode::Char(' ') | KeyCode::Enter => reviewer.reveal(),
         KeyCode::Char('1') if revealed => reviewer.answer(Rating::Again)?,
         KeyCode::Char('2') if revealed => reviewer.answer(Rating::Hard)?,
@@ -93,6 +120,7 @@ pub fn handle(reviewer: &mut Reviewer, key: KeyEvent) -> Result<Action> {
         KeyCode::Char('s') => reviewer.suspend()?,
         KeyCode::Char('b') => reviewer.bury()?,
         KeyCode::Char('f') => reviewer.cycle_flag()?,
+        KeyCode::Char('m') => reviewer.toggle_mark()?,
         _ => {}
     }
     Ok(Action::Continue)
@@ -230,12 +258,15 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer, status: Opti
             Span::raw(" back to decks").bold(),
         ]),
     };
-    let mut secondary = vec![
-        Span::raw(" u undo   s suspend   b bury   f flag   e edit   esc decks   q quit").dim(),
-    ];
+    // The rest of the keys, esc and q among them, are one `?` away.
+    let mut secondary =
+        vec![Span::raw(" u undo   s suspend   b bury   f flag   m mark   e edit   ? help").dim()];
     if let Some(flag) = reviewer.current.as_ref().map(|c| c.flag).filter(|&f| f > 0) {
         secondary.push(Span::raw("   flag: ").dim());
         secondary.push(Span::raw(flag_name(flag)).fg(flag_color(flag)));
+    }
+    if reviewer.current.as_ref().is_some_and(|c| c.marked) {
+        secondary.push(Span::raw("   ★ marked").fg(Color::Yellow));
     }
     if let Some(status) = status {
         secondary.push(Span::raw(format!("   {status}")).italic());

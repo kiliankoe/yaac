@@ -3,13 +3,12 @@ use std::path::PathBuf;
 
 use anki::collection::Collection;
 use anki::notes::Note;
-use anki_proto::notes::note_fields_check_response::State as FieldsState;
 use anyhow::{Context as _, Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
 use crate::cli::Context;
-use crate::notes::{self, NoteList};
+use crate::notes::{self, FieldsCheck, NoteList};
 use crate::output;
 use crate::session::AnkiResultExt;
 
@@ -149,8 +148,7 @@ fn read_inputs(path: &PathBuf) -> Result<Vec<NoteInput>> {
     Ok(inputs)
 }
 
-/// Runs Anki's own pre-add checks (empty first field, duplicates, cloze markers) and adds
-/// the note, returning its new id.
+/// Runs Anki's own pre-add checks and adds the note, returning its new id.
 fn add(
     col: &mut Collection,
     note: &mut Note,
@@ -158,21 +156,12 @@ fn add(
     deck: anki::decks::DeckId,
     allow_duplicate: bool,
 ) -> Result<anki::notes::NoteId> {
-    match col.note_fields_check(note).ctx("checking fields")? {
-        FieldsState::Normal => {}
-        FieldsState::Duplicate if allow_duplicate => {}
-        FieldsState::Duplicate => bail!(
+    if notes::check_new_note(col, note, notetype_name)? == FieldsCheck::Duplicate
+        && !allow_duplicate
+    {
+        bail!(
             "a {notetype_name} note with the same first field already exists (use --allow-duplicate to add anyway)"
-        ),
-        FieldsState::Empty => bail!("the first field is empty"),
-        FieldsState::MissingCloze => {
-            bail!(
-                "{notetype_name} is a cloze notetype but no field contains a {{{{c1::...}}}} marker"
-            )
-        }
-        FieldsState::NotetypeNotCloze | FieldsState::FieldNotCloze => {
-            bail!("cloze markers found but {notetype_name} is not a cloze notetype")
-        }
+        );
     }
     col.add_note(note, deck).ctx("adding note")?;
     Ok(note.id)

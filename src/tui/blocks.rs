@@ -13,6 +13,11 @@ use crate::render::html::image_label;
 use crate::render::occlusion::Mask;
 use crate::tui::images::{Encoded, Images};
 
+/// Lines longer than this are awkward to read, so on wide terminals the content gets
+/// margins instead of the full width. The callers add their own padding at the screen
+/// edges on top of this.
+pub const MAX_WIDTH: u16 = 120;
+
 /// Where the content sits in its area.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
@@ -54,6 +59,7 @@ pub fn draw(
     images: &mut Images,
     options: Options,
 ) -> u16 {
+    let area = readable(area, options.align);
     let placed = place(blocks, area, images, options.align);
     let total: u16 = placed.iter().map(Placed::height).sum();
     let start = if options.vertical_center {
@@ -121,6 +127,23 @@ pub fn draw(
         }
     }
     total
+}
+
+/// The area narrowed to `MAX_WIDTH`, kept to the side the content aligns to.
+fn readable(area: Rect, align: Alignment) -> Rect {
+    if area.width <= MAX_WIDTH {
+        return area;
+    }
+    let x = match align {
+        Alignment::Left => area.x,
+        Alignment::Center => area.x + (area.width - MAX_WIDTH) / 2,
+        Alignment::Right => area.x + area.width - MAX_WIDTH,
+    };
+    Rect {
+        x,
+        width: MAX_WIDTH,
+        ..area
+    }
 }
 
 /// Measures every block against the area. Images get at most half the height each and

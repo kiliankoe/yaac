@@ -503,3 +503,15 @@ mv "$f.tmp" "$f"
         .assert()
         .code(2);
 }
+
+#[test]
+fn a_bare_yaac_is_review() {
+    // Without a subcommand the review screen opens; with an unusable collection that
+    // fails before any terminal work, and differently from a usage error.
+    yaac()
+        .args(["--collection", "/nonexistent/collection.anki2"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("collection not found"));
+}

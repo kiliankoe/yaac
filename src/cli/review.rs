@@ -16,7 +16,7 @@ use crate::tui::decks::{Choice, Picker};
 use crate::tui::images::{self, Images};
 use crate::tui::review::Action;
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub struct ReviewArgs {
     /// Deck to review. Without it a picker lists every deck with today's counts.
     #[arg(value_name = "DECK")]
@@ -42,7 +42,18 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
         ),
         None => None,
     };
-    let mut picker = Picker::new(decks::rows(&mut session.col)?);
+    let notetypes = session
+        .col
+        .storage
+        .get_all_notetype_names()
+        .ctx("listing notetypes")?
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect();
+    let mut picker = Picker::new(decks::rows(&mut session.col)?, notetypes);
+    if let Some(name) = &ctx.config.default_notetype {
+        picker.set_default_notetype(name);
+    }
     let mut summary = Summary {
         decks: Vec::new(),
         answered: 0,

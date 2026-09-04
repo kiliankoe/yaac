@@ -41,6 +41,8 @@ pub struct Current {
     /// Next-interval descriptions for Again, Hard, Good, Easy, e.g. "<1m", "4d".
     pub labels: [String; 4],
     pub flag: u32,
+    /// The note carries Anki's "marked" tag.
+    pub marked: bool,
     pub revealed: bool,
     states: SchedulingStates,
     shown_at: Instant,
@@ -95,6 +97,8 @@ impl<'a> Reviewer<'a> {
             None => None,
             Some(queued) => {
                 let card_id = queued.card.id();
+                let note_id = queued.card.note_id();
+                let marked = notes::is_marked(&notes::get_note(self.col, note_id)?.tags);
                 let (question, answer, css) = render(self.col, card_id)?;
                 let labels: [String; 4] = self
                     .col
@@ -105,7 +109,7 @@ impl<'a> Reviewer<'a> {
                 let proto: CardProto = queued.card.clone().into();
                 Some(Current {
                     card_id,
-                    note_id: queued.card.note_id(),
+                    note_id,
                     // Queue numbers: 0 new, 1 and 3 learning, 2 review; 4 is preview.
                     kind: match proto.queue {
                         0 => Kind::New,
@@ -117,6 +121,7 @@ impl<'a> Reviewer<'a> {
                     css,
                     labels,
                     flag: proto.flags,
+                    marked,
                     revealed: false,
                     states: queued.states,
                     shown_at: Instant::now(),
@@ -236,6 +241,34 @@ impl<'a> Reviewer<'a> {
             .ctx("setting flag")?;
         current.flag = next;
         Ok(())
+    }
+}
+
+impl Reviewer<'_> {
+    /// Adds or removes the "marked" tag on the current card's note, the way the
+    /// desktop's mark toggle does.
+    pub fn toggle_mark(&mut self) -> Result<()> {
+        let Some((note_id, marked)) = self
+            .current
+            .as_ref()
+            .map(|current| (current.note_id, current.marked))
+        else {
+            return Ok(());
+        };
+        if marked {
+            self.col
+                .remove_tags_from_notes(&[note_id], notes::MARKED_TAG)
+                .ctx("unmarking note")?;
+        } else {
+            self.col
+                .add_tags_to_notes(&[note_id], notes::MARKED_TAG)
+                .ctx("marking note")?;
+        }
+        if let Some(current) = &mut self.current {
+            current.marked = !marked;
+        }
+        // Templates can show the tags, so the card is rendered again.
+        self.rerender()
     }
 }
 

@@ -9,11 +9,12 @@ use std::path::Path;
 use std::process::Command;
 
 use anki::collection::Collection;
+use anki::decks::DeckId;
 use anki::notes::{Note, NoteId};
 use anki::notetype::Notetype;
 use anyhow::{Context, Result, bail};
 
-use crate::notes;
+use crate::notes::{self, FieldsCheck};
 use crate::session::AnkiResultExt;
 
 const ERROR_PREFIX: &str = "<!-- yaac error:";
@@ -86,7 +87,7 @@ pub fn edit_note(col: &mut Collection, nid: NoteId, editor: &Editor) -> Result<O
     let notetype = notes::get_notetype(col, &note)?;
     let original = Draft::from_note(&note, &notetype);
     let description = format!("note {} ({})", nid.0, notetype.name);
-    let Some(edited) = edit_draft(&original, &description, editor)? else {
+    let Some(edited) = edit_draft(&original, &description, editor, &mut |_| Ok(()))? else {
         return Ok(Outcome::Aborted);
     };
     if edited == original {
@@ -97,20 +98,56 @@ pub fn edit_note(col: &mut Collection, nid: NoteId, editor: &Editor) -> Result<O
 }
 
 pub fn apply(col: &mut Collection, note: &mut Note, draft: &Draft) -> Result<()> {
-    for (idx, (_, html)) in draft.fields.iter().enumerate() {
-        note.set_field(idx, html.clone()).ctx("setting field")?;
-    }
-    note.tags = draft.tags.clone();
+    draft.fill(note)?;
     col.update_note(note).ctx("updating note")?;
     Ok(())
 }
 
+/// Opens an empty note of the notetype in the editor and adds what comes back to the
+/// deck. Anki's checks run on every save: an empty first field or cloze markers that do
+/// not fit reopen the file with the problem on top, and so does a duplicate, once, so
+/// that saving again unchanged adds it anyway. `None` when the user emptied the file.
+pub fn add_note(
+    col: &mut Collection,
+    deck: DeckId,
+    notetype: &Notetype,
+    editor: &Editor,
+) -> Result<Option<NoteId>> {
+    let empty = Draft::empty(notetype);
+    let description = format!("new {} note", notetype.name);
+    let mut warned_about: Option<Draft> = None;
+    let edited = edit_draft(&empty, &description, editor, &mut |draft| {
+        let note = draft.to_note(notetype)?;
+        if notes::check_new_note(col, &note, &notetype.name)? == FieldsCheck::Duplicate
+            && warned_about.as_ref() != Some(draft)
+        {
+            warned_about = Some(draft.clone());
+            bail!(
+                "a {} note with the same first field already exists (save again without changes to add it anyway)",
+                notetype.name
+            );
+        }
+        Ok(())
+    })?;
+    let Some(draft) = edited else {
+        return Ok(None);
+    };
+    let mut note = draft.to_note(notetype)?;
+    col.add_note(&mut note, deck).ctx("adding note")?;
+    Ok(Some(note.id))
+}
+
 /// Writes the draft to a temporary file, opens the editor, and parses what comes back.
-/// A file that does not parse is reopened with the error at the top, until it parses or
-/// the user empties it. `None` means the user aborted.
-pub fn edit_draft(draft: &Draft, description: &str, editor: &Editor) -> Result<Option<Draft>> {
+/// A file that does not parse, or that `validate` rejects, is reopened with the error
+/// at the top, until it passes or the user empties it. `None` means the user aborted.
+pub fn edit_draft(
+    draft: &Draft,
+    description: &str,
+    editor: &Editor,
+    validate: &mut dyn FnMut(&Draft) -> Result<()>,
+) -> Result<Option<Draft>> {
     let path = std::env::temp_dir().join(format!("yaac-edit-{}.md", std::process::id()));
-    let result = edit_file(draft, description, editor, &path);
+    let result = edit_file(draft, description, editor, &path, validate);
     // Best effort: a leftover file in the temp dir is harmless.
     let _ = std::fs::remove_file(&path);
     result
@@ -121,6 +158,7 @@ fn edit_file(
     description: &str,
     editor: &Editor,
     path: &Path,
+    validate: &mut dyn FnMut(&Draft) -> Result<()>,
 ) -> Result<Option<Draft>> {
     let mut text = draft.to_text(description);
     loop {
@@ -128,15 +166,18 @@ fn edit_file(
         editor.open(path)?;
         let edited =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        match draft.parse(&edited) {
-            Ok(parsed) => return Ok(parsed),
-            Err(err) => {
-                text = format!(
-                    "{ERROR_PREFIX} {err:#}. Fix it and save again, or empty the file to abort. -->\n{}",
-                    strip_error_comment(&edited)
-                );
-            }
-        }
+        let problem = match draft.parse(&edited) {
+            Ok(None) => return Ok(None),
+            Ok(Some(parsed)) => match validate(&parsed) {
+                Ok(()) => return Ok(Some(parsed)),
+                Err(err) => err,
+            },
+            Err(err) => err,
+        };
+        text = format!(
+            "{ERROR_PREFIX} {problem:#}. Fix it and save again, or empty the file to abort. -->\n{}",
+            strip_error_comment(&edited)
+        );
     }
 }
 
@@ -160,6 +201,34 @@ impl Draft {
         }
     }
 
+    /// No tags and every field of the notetype empty, for a new note.
+    pub fn empty(notetype: &Notetype) -> Self {
+        Self {
+            tags: Vec::new(),
+            fields: notetype
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), String::new()))
+                .collect(),
+        }
+    }
+
+    /// A new note of the notetype with the draft's fields and tags.
+    pub fn to_note(&self, notetype: &Notetype) -> Result<Note> {
+        let mut note = Note::new(notetype);
+        self.fill(&mut note)?;
+        Ok(note)
+    }
+
+    /// Writes the fields and tags into `note`.
+    fn fill(&self, note: &mut Note) -> Result<()> {
+        for (idx, (_, html)) in self.fields.iter().enumerate() {
+            note.set_field(idx, html.clone()).ctx("setting field")?;
+        }
+        note.tags = self.tags.clone();
+        Ok(())
+    }
+
     /// The file the user edits: a comment with instructions, the tags, then one
     /// markdown heading per field. The `.md` name gets editors to highlight both the
     /// headings and any HTML inside the fields.
@@ -170,7 +239,13 @@ impl Draft {
             self.tags.join(" ")
         );
         for (name, html) in &self.fields {
-            text.push_str(&format!("\n# {name}\n\n{}\n", editable(html)));
+            let body = editable(html);
+            if body.is_empty() {
+                // One blank line to type into, rather than three.
+                text.push_str(&format!("\n# {name}\n\n"));
+            } else {
+                text.push_str(&format!("\n# {name}\n\n{body}\n"));
+            }
         }
         text
     }
@@ -303,6 +378,23 @@ mod tests {
              \n# Front\n\nel gato\nla gata\n\
              \n# Back\n\n<b>cat</b>\n\n"
         );
+    }
+
+    #[test]
+    fn empty_fields_get_a_heading_and_one_blank_line() {
+        let draft = Draft {
+            tags: Vec::new(),
+            fields: vec![
+                ("Front".into(), String::new()),
+                ("Back".into(), String::new()),
+            ],
+        };
+        let text = draft.to_text("new Basic note");
+        assert!(
+            text.ends_with("tags: \n\n# Front\n\n\n# Back\n\n"),
+            "{text:?}"
+        );
+        assert_eq!(draft.parse(&text).unwrap().unwrap(), draft);
     }
 
     #[test]

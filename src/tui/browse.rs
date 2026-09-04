@@ -19,12 +19,23 @@ use crate::editor::{self, Editor, Outcome};
 use crate::notes::{self, NoteView, truncate};
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::session::{Session, anki_error};
-use crate::tui::blocks;
 use crate::tui::images::Images;
-use crate::tui::{Terminal, next_key};
+use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
 
 /// Side-by-side panes need this much width; narrower terminals stack them.
 const SIDE_BY_SIDE_MIN_WIDTH: u16 = 100;
+
+const KEYS: &[(&str, &str)] = &[
+    ("/", "type a search; enter or esc leaves the box"),
+    ("ctrl-u", "clear the search while typing"),
+    ("j/k, ↑/↓", "move through the notes"),
+    ("g/G", "first and last note"),
+    ("ctrl-d/u, page down/up", "scroll the note"),
+    ("e", "edit the note in $EDITOR"),
+    ("u", "undo the last edit"),
+    ("r", "re-send and redraw the images"),
+    ("q", "quit"),
+];
 
 /// What a key press asks the browse loop to do.
 #[derive(Debug, PartialEq, Eq)]
@@ -36,6 +47,8 @@ pub enum BrowseAction {
     Undo,
     /// Re-send the images.
     Redraw,
+    /// Something drawn over the images went away; send their placements again.
+    Refresh,
     Quit,
 }
 
@@ -53,6 +66,8 @@ pub struct Browser {
     /// scrolling.
     detail: (u16, u16),
     status: Option<String>,
+    /// The `?` overlay is up.
+    help: bool,
 }
 
 impl Browser {
@@ -68,6 +83,7 @@ impl Browser {
             scroll: 0,
             detail: (0, 0),
             status: None,
+            help: false,
         }
     }
 
@@ -120,10 +136,15 @@ impl Browser {
     }
 
     pub fn handle(&mut self, key: KeyEvent) -> BrowseAction {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && key.code == KeyCode::Char('c') {
+        if is_ctrl_c(key) {
             return BrowseAction::Quit;
         }
+        // The overlay swallows the key that closes it.
+        if self.help {
+            self.help = false;
+            return BrowseAction::Refresh;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if self.typing {
             // The query runs on every change; leaving the box only frees the letter
             // keys for the list. Arrows work in both modes.
@@ -151,6 +172,7 @@ impl Browser {
         }
         match key.code {
             KeyCode::Char('q') => return BrowseAction::Quit,
+            KeyCode::Char('?') => self.help = true,
             KeyCode::Char('/') => {
                 self.typing = true;
                 self.status = None;
@@ -228,11 +250,15 @@ impl Browser {
         let help_line = if self.typing {
             Line::from(" enter/esc done   ↑/↓ move   ctrl-u clear").dim()
         } else {
-            Line::from(" / search   e edit   u undo   j/k move   ctrl-d/u scroll   q quit").dim()
+            Line::from(" / search   e edit   u undo   j/k move   ctrl-d/u scroll   q quit   ? help")
+                .dim()
         };
         frame.render_widget(Paragraph::new(help_line), help);
         if let Some(message) = &self.status {
             frame.render_widget(Paragraph::new(format!(" {message}")).italic(), status);
+        }
+        if self.help {
+            overlay::keys(frame, "Browse keys", KEYS);
         }
     }
 
@@ -411,6 +437,7 @@ pub fn run(
         match browser.handle(key) {
             BrowseAction::Continue => {}
             BrowseAction::Redraw => images.clear(),
+            BrowseAction::Refresh => images.refresh(),
             BrowseAction::Search => search(session, browser)?,
             BrowseAction::Edit(nid) => {
                 let editor = Editor::from_env();

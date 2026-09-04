@@ -205,6 +205,13 @@ impl Images {
         self.refresh_requested = true;
     }
 
+    /// Sends the current placements again on the next frame, after something drawn
+    /// over an image was removed: ratatui repaints the cells underneath, which loses
+    /// their marks under tmux.
+    pub fn refresh(&mut self) {
+        self.refresh_requested = true;
+    }
+
     /// Call at the start of a frame; placements are recorded until `end_frame`.
     pub fn begin_frame(&mut self) {
         self.placed_before = std::mem::take(&mut self.placed);

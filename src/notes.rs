@@ -11,6 +11,7 @@ use anki::notes::{Note, NoteId};
 use anki::notetype::{Notetype, NotetypeKind};
 use anki::text::{html_to_text_line, strip_html_preserving_media_filenames};
 use anki_proto::cards::Card as CardProto;
+use anki_proto::notes::note_fields_check_response::State as FieldsState;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
@@ -75,6 +76,13 @@ impl CardView {
         }
         parts
     }
+}
+
+/// Anki's "marked" state is this tag on the note; the desktop shows it as a star.
+pub const MARKED_TAG: &str = "marked";
+
+pub fn is_marked(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag.eq_ignore_ascii_case(MARKED_TAG))
 }
 
 /// Anki's flag colours by number; 0 is no flag.
@@ -223,6 +231,37 @@ pub fn resolve_deck(col: &mut Collection, name: Option<&str>, config: &Config) -
     col.get_deck_id(name)
         .ctx("looking up deck")?
         .with_context(|| format!("deck {name:?} does not exist; see `yaac decks`"))
+}
+
+/// What Anki's pre-add checks found, short of an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldsCheck {
+    Ok,
+    /// Another note of the notetype has the same first field.
+    Duplicate,
+}
+
+/// Runs Anki's own checks on a note about to be added. An empty first field and cloze
+/// markers that do not match the notetype are errors; a duplicate is reported, since
+/// callers let the user allow it.
+pub fn check_new_note(
+    col: &mut Collection,
+    note: &Note,
+    notetype_name: &str,
+) -> Result<FieldsCheck> {
+    Ok(match col.note_fields_check(note).ctx("checking fields")? {
+        FieldsState::Normal => FieldsCheck::Ok,
+        FieldsState::Duplicate => FieldsCheck::Duplicate,
+        FieldsState::Empty => bail!("the first field is empty"),
+        FieldsState::MissingCloze => {
+            bail!(
+                "{notetype_name} is a cloze notetype but no field contains a {{{{c1::...}}}} marker"
+            )
+        }
+        FieldsState::NotetypeNotCloze | FieldsState::FieldNotCloze => {
+            bail!("cloze markers found but {notetype_name} is not a cloze notetype")
+        }
+    })
 }
 
 pub fn field_index(notetype: &Notetype, name: &str) -> Option<usize> {

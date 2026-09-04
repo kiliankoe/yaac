@@ -1,12 +1,12 @@
 //! Deck picker shown by `review`: lists decks with today's counts, filters on `/`,
-//! syncs on `s`, and stays alive across review sessions so Esc from a review lands
-//! back here with fresh counts.
+//! syncs on `s`, adds a note to the selected deck on `a`, and stays alive across
+//! review sessions so Esc from a review lands back here with fresh counts.
 
 use std::time::Duration;
 
 use anki::decks::DeckId;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -14,9 +14,23 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use crate::decks::{self, DeckRow};
-use crate::session::Session;
+use crate::editor::{self, Editor};
+use crate::notes;
+use crate::session::{AnkiResultExt, Session};
 use crate::sync::{self, Auth, NormalOutcome};
-use crate::tui::{Terminal, next_key};
+use crate::tui::{Terminal, is_ctrl_c, next_key, overlay};
+
+const KEYS: &[(&str, &str)] = &[
+    ("enter", "review the selected deck"),
+    ("a", "add a note to the selected deck"),
+    ("A", "add another note of the notetype used last"),
+    ("s", "sync the collection and media"),
+    ("/", "filter decks by name"),
+    ("esc", "clear the filter"),
+    ("j/k, ↑/↓", "move"),
+    ("g/G", "first and last deck"),
+    ("q", "quit"),
+];
 
 pub enum Choice {
     Deck(DeckId),
@@ -29,6 +43,11 @@ pub enum PickerAction {
     Continue,
     Select(DeckId),
     Sync,
+    /// Add a note of the notetype to the deck, in the editor.
+    Add {
+        deck: DeckId,
+        notetype: String,
+    },
     Quit,
 }
 
@@ -38,16 +57,29 @@ pub struct Picker {
     searching: bool,
     list: ListState,
     status: Option<String>,
+    /// Notetype names offered by `a`, and the one used last (or the config's
+    /// default), which the chooser starts on and `A` takes without asking.
+    notetypes: Vec<String>,
+    last_notetype: Option<usize>,
+    /// The chooser opened by `a`: the deck the note goes to and the highlighted
+    /// notetype.
+    chooser: Option<(DeckId, ListState)>,
+    /// The `?` overlay is up.
+    help: bool,
 }
 
 impl Picker {
-    pub fn new(rows: Vec<DeckRow>) -> Self {
+    pub fn new(rows: Vec<DeckRow>, notetypes: Vec<String>) -> Self {
         let mut picker = Self {
             rows,
             filter: String::new(),
             searching: false,
             list: ListState::default(),
             status: None,
+            notetypes,
+            last_notetype: None,
+            chooser: None,
+            help: false,
         };
         // Start on the first deck with something due, which is what most sessions want.
         let first_due = picker
@@ -73,6 +105,17 @@ impl Picker {
         self.status = Some(status.into());
     }
 
+    /// The config's default notetype counts as used last until a note is added.
+    pub fn set_default_notetype(&mut self, name: &str) {
+        if let Some(index) = self.notetypes.iter().position(|n| n == name) {
+            self.last_notetype = Some(index);
+        }
+    }
+
+    pub fn choosing_notetype(&self) -> bool {
+        self.chooser.is_some()
+    }
+
     /// Rows matching the filter, by case-insensitive substring of the full name.
     pub fn visible(&self) -> Vec<&DeckRow> {
         let needle = self.filter.to_lowercase();
@@ -90,8 +133,16 @@ impl Picker {
     }
 
     pub fn handle(&mut self, key: KeyEvent) -> PickerAction {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if is_ctrl_c(key) {
             return PickerAction::Quit;
+        }
+        // The overlay swallows the key that closes it.
+        if self.help {
+            self.help = false;
+            return PickerAction::Continue;
+        }
+        if self.chooser.is_some() {
+            return self.handle_chooser(key);
         }
         match key.code {
             KeyCode::Down => self.list.select_next(),
@@ -123,6 +174,27 @@ impl Picker {
                 _ => {}
             },
             KeyCode::Char('q') => return PickerAction::Quit,
+            KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                let Some(deck) = self.selected().map(|row| DeckId(row.id)) else {
+                    return PickerAction::Continue;
+                };
+                if self.notetypes.is_empty() {
+                    self.status = Some("no notetypes to add a note with".to_string());
+                    return PickerAction::Continue;
+                }
+                if key.code == KeyCode::Char('A') {
+                    if let Some(notetype) = self.last_notetype.and_then(|i| self.notetypes.get(i)) {
+                        return PickerAction::Add {
+                            deck,
+                            notetype: notetype.clone(),
+                        };
+                    }
+                }
+                let list =
+                    ListState::default().with_selected(Some(self.last_notetype.unwrap_or(0)));
+                self.chooser = Some((deck, list));
+            }
             KeyCode::Char('/') if !self.filter.is_empty() => self.searching = true,
             KeyCode::Char('/') => {
                 self.searching = true;
@@ -133,6 +205,36 @@ impl Picker {
             KeyCode::Char('k') => self.list.select_previous(),
             KeyCode::Char('g') | KeyCode::Home => self.list.select_first(),
             KeyCode::Char('G') | KeyCode::End => self.list.select_last(),
+            _ => {}
+        }
+        PickerAction::Continue
+    }
+
+    fn handle_chooser(&mut self, key: KeyEvent) -> PickerAction {
+        let last = self.notetypes.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.chooser = None,
+            KeyCode::Enter => {
+                if let Some((deck, list)) = self.chooser.take() {
+                    if let Some(index) = list.selected().filter(|&i| i < self.notetypes.len()) {
+                        self.last_notetype = Some(index);
+                        return PickerAction::Add {
+                            deck,
+                            notetype: self.notetypes[index].clone(),
+                        };
+                    }
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some((_, list)) = &mut self.chooser {
+                    list.select(Some((list.selected().unwrap_or(0) + 1).min(last)));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some((_, list)) = &mut self.chooser {
+                    list.select(Some(list.selected().unwrap_or(0).saturating_sub(1)));
+                }
+            }
             _ => {}
         }
         PickerAction::Continue
@@ -203,16 +305,49 @@ impl Picker {
                 Span::raw("   enter review   esc clear").dim(),
             ])
         } else if self.filter.is_empty() {
-            Line::from(" enter review   / search   s sync   j/k move   q quit").dim()
+            Line::from(" enter review   / search   s sync   a/A add   j/k move   q quit   ? help")
+                .dim()
         } else {
             Line::from(vec![
                 Span::raw(format!(" filter: {}   ", self.filter)),
-                Span::raw("enter review   / edit   s sync   q quit").dim(),
+                Span::raw("enter review   / edit   s sync   a/A add   q quit   ? help").dim(),
             ])
         };
         frame.render_widget(Paragraph::new(help_line), help);
         if let Some(message) = &self.status {
             frame.render_widget(Paragraph::new(format!(" {message}")).italic(), status);
+        }
+        if let Some((deck, list)) = &mut self.chooser {
+            let deck_name = self
+                .rows
+                .iter()
+                .find(|row| row.id == deck.0)
+                .map_or("deck", |row| row.name.as_str());
+            let width = self
+                .notetypes
+                .iter()
+                .map(|name| name.chars().count() + 2)
+                .max()
+                .unwrap_or(0);
+            let inner = overlay::boxed(
+                frame,
+                &format!("Add to {deck_name}"),
+                "enter choose   esc cancel",
+                width as u16,
+                self.notetypes.len() as u16,
+            );
+            let items: Vec<ListItem> = self
+                .notetypes
+                .iter()
+                .map(|name| ListItem::new(format!(" {name}")))
+                .collect();
+            let chooser = List::new(items)
+                .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+                .highlight_symbol("▶");
+            frame.render_stateful_widget(chooser, inner, list);
+        }
+        if self.help {
+            overlay::keys(frame, "Deck keys", KEYS);
         }
     }
 }
@@ -247,8 +382,9 @@ fn deck_item(row: &DeckRow, name_width: usize) -> ListItem<'static> {
     ListItem::new(line)
 }
 
-/// Runs the picker until a deck is chosen or the user quits. Syncing happens here
-/// because it needs the terminal for a "syncing" frame and the session for the work.
+/// Runs the picker until a deck is chosen or the user quits. Syncing and adding happen
+/// here because they need the session, and the terminal for a "syncing" frame or for
+/// the editor.
 pub fn pick(terminal: &mut Terminal, session: &mut Session, picker: &mut Picker) -> Result<Choice> {
     loop {
         terminal.draw(|frame| picker.draw(frame))?;
@@ -272,6 +408,28 @@ pub fn pick(terminal: &mut Terminal, session: &mut Session, picker: &mut Picker)
                 let outcome = picker.sync(session, auth);
                 picker.set_status(outcome);
                 picker.set_rows(decks::rows(&mut session.col)?);
+            }
+            PickerAction::Add { deck, notetype } => {
+                let Some(notetype) = session
+                    .col
+                    .get_notetype_by_name(&notetype)
+                    .ctx("looking up notetype")?
+                else {
+                    picker.set_status(format!("notetype {notetype:?} no longer exists"));
+                    continue;
+                };
+                let editor = Editor::from_env();
+                let outcome = terminal
+                    .suspend(|| editor::add_note(&mut session.col, deck, &notetype, &editor))?;
+                match outcome {
+                    Ok(Some(_)) => {
+                        let deck_name = notes::deck_name(&mut session.col, deck)?;
+                        picker.set_status(format!("added a {} note to {deck_name}", notetype.name));
+                        picker.set_rows(decks::rows(&mut session.col)?);
+                    }
+                    Ok(None) => picker.set_status("aborted"),
+                    Err(err) => picker.set_status(format!("add failed: {err:#}")),
+                }
             }
         }
     }

@@ -273,3 +273,59 @@ fn an_empty_search_box_explains_itself() {
     assert!(lines.iter().any(|line| line.contains("Type a search")));
     assert!(lines[8].contains("enter/esc done"), "{}", lines[8]);
 }
+
+#[test]
+fn question_mark_shows_the_keys_and_closing_them_refreshes_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = dir.path().join("collection.media");
+    let mut browser = Browser::new("deck:*");
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('?')),
+        BrowseAction::Continue
+    );
+    let lines = screen(&mut browser, 100, 24, &media);
+    assert!(
+        lines.iter().any(|line| line.contains("ctrl-d")),
+        "{lines:#?}"
+    );
+    assert!(lines.iter().any(|line| line.contains("undo")), "{lines:#?}");
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('q')),
+        BrowseAction::Refresh,
+        "the closing key is swallowed, images under the box are sent again"
+    );
+    assert_eq!(press(&mut browser, KeyCode::Char('q')), BrowseAction::Quit);
+
+    // While typing, ? is part of the query.
+    press(&mut browser, KeyCode::Char('/'));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('?')),
+        BrowseAction::Search
+    );
+    assert_eq!(browser.query(), "deck:*?");
+}
+
+#[test]
+fn the_detail_pane_wraps_long_fields_at_a_readable_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let words: Vec<String> = (1..=60).map(|i| format!("word{i}")).collect();
+    add_basic(&path, "long", &words.join(" "));
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut browser = Browser::new("deck:Default");
+    browse::search(&mut session, &mut browser).unwrap();
+    let media = dir.path().join("collection.media");
+
+    let lines = screen(&mut browser, 300, 24, &media);
+    let text_rows: Vec<&String> = lines.iter().filter(|line| line.contains("word")).collect();
+    assert!(text_rows.len() >= 3, "wrapped: {text_rows:?}");
+    for line in text_rows {
+        // The list takes 40% (120 columns), the pane border and inset 2 more.
+        assert!(
+            line.trim_end().len() <= 122 + 120,
+            "no wider than 120 columns after the list: {}",
+            line.trim_end().len()
+        );
+    }
+    session.close().unwrap();
+}

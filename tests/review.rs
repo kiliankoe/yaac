@@ -287,3 +287,83 @@ fn editing_the_note_rerenders_the_card_and_is_undoable() {
     drop(reviewer);
     session.close().unwrap();
 }
+
+#[test]
+fn marking_toggles_the_marked_tag_and_is_undoable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let nid = anki::notes::NoteId(add_basic(&path, "cinco", "five"));
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    assert!(!reviewer.current.as_ref().unwrap().marked);
+
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char('m'))).unwrap();
+    assert!(reviewer.current.as_ref().unwrap().marked);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut images = Images::disabled(dir.path().join("collection.media"));
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut images, None))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    assert!(screen[23].contains("marked"), "{}", screen[23]);
+
+    assert!(reviewer.undo().unwrap());
+    assert!(!reviewer.current.as_ref().unwrap().marked);
+    reviewer.toggle_mark().unwrap();
+    reviewer.toggle_mark().unwrap();
+    assert!(!reviewer.current.as_ref().unwrap().marked);
+    drop(reviewer);
+    let note = yaac::notes::get_note(&mut session.col, nid).unwrap();
+    assert!(
+        note.tags.is_empty(),
+        "unmarking removes the tag: {:?}",
+        note.tags
+    );
+
+    let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    reviewer.toggle_mark().unwrap();
+    drop(reviewer);
+    let note = yaac::notes::get_note(&mut session.col, nid).unwrap();
+    assert_eq!(note.tags, ["marked"]);
+    let reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    assert!(
+        reviewer.current.as_ref().unwrap().marked,
+        "the mark is read from the note's tags"
+    );
+    drop(reviewer);
+    session.close().unwrap();
+}
+
+#[test]
+fn long_text_wraps_at_a_readable_width_on_wide_terminals() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let words: Vec<String> = (1..=80).map(|i| format!("word{i}")).collect();
+    add_basic(&path, &words.join(" "), "x");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(240, 24)).unwrap();
+    let mut images = Images::disabled(dir.path().join("collection.media"));
+
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut images, None))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    let text_rows: Vec<&String> = screen[1..22]
+        .iter()
+        .filter(|line| line.contains("word"))
+        .collect();
+    assert!(
+        text_rows.len() >= 3,
+        "wrapped into several rows: {text_rows:?}"
+    );
+    for line in text_rows {
+        let start = line.find("word").unwrap();
+        let end = line.trim_end().len();
+        // 2 columns of margin, then the 120-column cap centered in the remaining 236.
+        assert!(
+            start >= 60 && end <= 180,
+            "kept to a centered column, got {start}..{end}: {line}"
+        );
+    }
+}
