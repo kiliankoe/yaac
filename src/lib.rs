@@ -10,5 +10,6 @@ pub mod output;
 pub mod render;
 pub mod review;
 pub mod session;
+pub mod stats;
 pub mod sync;
 pub mod tui;

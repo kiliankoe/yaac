@@ -10,6 +10,7 @@ mod notetypes;
 mod review;
 mod search;
 mod show;
+mod stats;
 mod sync;
 mod tag;
 
@@ -64,6 +65,8 @@ enum Command {
     Decks,
     /// List notetypes with their fields and card templates.
     Notetypes,
+    /// Show the statistics the desktop's stats screen shows.
+    Stats(stats::StatsArgs),
     /// Log in to AnkiWeb (or a self-hosted sync server) and store the session key.
     Login(login::LoginArgs),
     /// Forget the stored sync credentials.
@@ -110,6 +113,7 @@ pub fn run() -> ExitCode {
             Command::Delete(args) => delete::run(&ctx, args),
             Command::Decks => decks::run(&ctx),
             Command::Notetypes => notetypes::run(&ctx),
+            Command::Stats(args) => stats::run(&ctx, args),
             Command::Login(args) => login::run(&ctx, args),
             Command::Logout => logout::run(&ctx),
             Command::Sync(args) => sync::run(&ctx, args),

@@ -45,6 +45,7 @@ yaac                                       # review; the default when no command
 yaac info                                  # location, counts, cards due today
 yaac decks                                 # decks with today's due counts
 yaac notetypes                             # notetypes with fields and card templates
+yaac stats [QUERY] [--all]                 # today, calendar, retention, and the rest of the desktop's stats screen
 
 yaac search deck:Spanish is:due            # Anki search syntax, words are joined
 yaac search tag:todo --ids                 # only ids, one per line, for piping
@@ -134,6 +135,10 @@ Fields are HTML as Anki stores them, with `<br>` shown as a line break and turne
 
 Adding a note with `a` in the deck picker opens the same file with empty fields; quitting the editor without typing anything aborts. On save, Anki's checks run as they do for `yaac add`: an empty first field or cloze markers that do not fit the notetype reopen the file with the problem at the top, and so does a duplicate first field, once; saving a duplicate again unchanged adds it anyway.
 
+### Stats
+
+`yaac stats` prints what the desktop's stats screen shows, in the same order: today's answers, cards due over the next month, a calendar heatmap of the last year with the current and longest streak, review counts and time, card counts, median interval and ease (difficulty, stability, and retrievability instead when FSRS is on), retention, the hourly breakdown, answer buttons, and cards added. Graphs become sparklines, and the tables put the desktop's default periods side by side, the last 31 days and the last 12 months. A query limits the numbers to matching cards, `yaac stats deck:Spanish`, and `--all` loads the whole history, which adds an all-time column, one calendar per year, and the all-time retention row. The counting is done by Anki's own statistics code, so the numbers agree with the desktop.
+
 ### Sync
 
 `login` exchanges your AnkiWeb credentials for a session key and stores only the key, in `~/.local/share/yaac/auth.toml` (or `$XDG_DATA_HOME/yaac/auth.toml`, or `$YAAC_AUTH`), readable by you alone. When stdin is not a terminal the password is read from it, so scripts never put it on a command line. `--endpoint URL` or `sync_endpoint` in the config points at a self-hosted sync server.
@@ -147,6 +152,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 collection locked.
 ### JSON
 
 Notes are objects with `id`, `guid`, `notetype`, `deck`, `tags`, `modified`, `sort_field`, `fields` (a name-to-HTML map in notetype order), and `cards` (each with `id`, `template`, `deck`, `queue`, `due_in_days`, `interval_days`, `reps`, `lapses`, `flag`). `search` and `add` print an array of them; `show` and `edit` too.
+
+`stats --json` prints the numbers behind every section, the calendar as a map from date to review count.
 
 `add --from-json` reads the same shape it prints, reduced to what matters:
 
