@@ -100,7 +100,7 @@ Images are drawn inline. yaac asks the terminal which graphics protocol it suppo
 
 ### Browse and edit
 
-`yaac browse` shows a search box, the matching notes sorted by their sort field, and the selected note's fields, tags, and cards. The panes sit side by side on wide terminals and stack on narrow ones, and the note's text wraps at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images in fields are drawn the same way as in review.
+`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images in fields are drawn the same way as in review.
 
 | Key                          | Action                                                         |
 | ---------------------------- | -------------------------------------------------------------- |
@@ -132,7 +132,7 @@ cat
 
 Fields are HTML as Anki stores them, with `<br>` shown as a line break and turned back into `<br>` on save. Everything else (images, styling, cloze markers) stays untouched. A field whose text you did not change is written back exactly as it was, a field whose heading you delete keeps its value, and `tags:` takes space-separated tags. Emptying the file aborts. A file that does not parse, because of an unknown heading say, is reopened with the error at the top. The change goes through Anki's own update path, so cards are regenerated and `u` undoes it. `$VISUAL` is tried before `$EDITOR`, either may include arguments (`code --wait`), and `vi` is the fallback.
 
-Adding a note with `a` in the deck picker opens the same file with empty fields. On save, Anki's checks run as they do for `yaac add`: an empty first field or cloze markers that do not fit the notetype reopen the file with the problem at the top, and so does a duplicate first field, once; saving a duplicate again unchanged adds it anyway.
+Adding a note with `a` in the deck picker opens the same file with empty fields; quitting the editor without typing anything aborts. On save, Anki's checks run as they do for `yaac add`: an empty first field or cloze markers that do not fit the notetype reopen the file with the problem at the top, and so does a duplicate first field, once; saving a duplicate again unchanged adds it anyway.
 
 ### Sync
 
