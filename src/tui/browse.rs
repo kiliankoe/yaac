@@ -1,13 +1,15 @@
 //! The browse screen: a search box on top, matching notes below it, the selected
 //! note's fields, tags, and cards under those. `e` opens the note in `$EDITOR`, `d`
-//! deletes it after asking.
+//! deletes it after asking, and `s`, `f`, and `m` suspend, flag, and mark it.
 
 use std::time::Duration;
 
 use anki::browser_table::Column;
+use anki::card::CardId;
 use anki::error::AnkiError;
 use anki::notes::NoteId;
 use anki::search::SortMode;
+use anki_proto::scheduler::bury_or_suspend_cards_request::Mode as BuryOrSuspendMode;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -31,7 +33,13 @@ const KEYS: &[(&str, &str)] = &[
     ("ctrl-d/u, page down/up", "scroll the note"),
     ("e", "edit the note in $EDITOR"),
     ("d", "delete the note, after confirming"),
-    ("u", "undo the last edit or deletion"),
+    (
+        "s",
+        "suspend the note's cards, or unsuspend them when all are",
+    ),
+    ("f", "cycle the flag colour on the note's cards"),
+    ("m", "mark or unmark the note"),
+    ("u", "undo the last change"),
     ("r", "re-send and redraw the images"),
     ("esc", "back to the decks when opened from there, else quit"),
     ("q", "quit"),
@@ -46,6 +54,12 @@ pub enum BrowseAction {
     Edit(NoteId),
     /// The user confirmed the deletion.
     Delete(NoteId),
+    /// Suspend every card of the note, or unsuspend them all.
+    Suspend(NoteId),
+    /// Step the flag on every card of the note.
+    Flag(NoteId),
+    /// Mark or unmark the note.
+    Mark(NoteId),
     Undo,
     /// Re-send the images.
     Redraw,
@@ -112,6 +126,18 @@ impl Browser {
 
     pub fn selected(&self) -> Option<&NoteView> {
         self.list.selected().and_then(|index| self.notes.get(index))
+    }
+
+    fn note(&self, nid: NoteId) -> Option<&NoteView> {
+        self.notes.iter().find(|note| note.id == nid.0)
+    }
+
+    /// The selected note's id for a key that acts on it, if there is one.
+    fn act_on_selected(&self, action: fn(NoteId) -> BrowseAction) -> BrowseAction {
+        match self.selected() {
+            Some(note) => action(NoteId(note.id)),
+            None => BrowseAction::Continue,
+        }
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
@@ -209,11 +235,10 @@ impl Browser {
                 self.typing = true;
                 self.status = None;
             }
-            KeyCode::Char('e') => {
-                if let Some(note) = self.selected() {
-                    return BrowseAction::Edit(NoteId(note.id));
-                }
-            }
+            KeyCode::Char('e') => return self.act_on_selected(BrowseAction::Edit),
+            KeyCode::Char('s') => return self.act_on_selected(BrowseAction::Suspend),
+            KeyCode::Char('f') => return self.act_on_selected(BrowseAction::Flag),
+            KeyCode::Char('m') => return self.act_on_selected(BrowseAction::Mark),
             KeyCode::Char('r') => return BrowseAction::Redraw,
             KeyCode::Char('d') if ctrl => self.scroll_by(self.half_page()),
             KeyCode::Char('u') if ctrl => self.scroll_by(-self.half_page()),
@@ -286,8 +311,11 @@ impl Browser {
         let help_line = if self.typing {
             Line::from(" enter/esc done   ↑/↓ move   ctrl-u clear").dim()
         } else {
-            Line::from(" / search   e edit   d delete   u undo   ctrl-d/u scroll   q quit   ? help")
-                .dim()
+            // Scrolling and quitting are one `?` away; this has to fit 80 columns.
+            Line::from(
+                " / search   e edit   d delete   s suspend   f flag   m mark   u undo   ? help",
+            )
+            .dim()
         };
         frame.render_widget(Paragraph::new(help_line), help);
         if let Some(message) = &self.status {
@@ -498,6 +526,72 @@ pub fn delete(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Resu
     Ok(())
 }
 
+/// Swaps in a fresh view of the note after something about it changed.
+fn refresh_note(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
+    if let Some(view) = notes::views(&mut session.col, &[nid])?.pop() {
+        browser.replace_note(view);
+    }
+    Ok(())
+}
+
+fn card_ids(note: &NoteView) -> Vec<CardId> {
+    note.cards.iter().map(|card| CardId(card.id)).collect()
+}
+
+/// Suspends every card of the note, or unsuspends them all once none is left to
+/// suspend: the desktop browser's toggle, applied to the whole note.
+pub fn toggle_suspend(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
+    let Some(note) = browser.note(nid) else {
+        return Ok(());
+    };
+    let cids = card_ids(note);
+    let status = if note.suspended() {
+        session
+            .col
+            .unbury_or_unsuspend_cards(&cids)
+            .ctx("unsuspending cards")?;
+        format!("unsuspended {} card(s)", cids.len())
+    } else {
+        session
+            .col
+            .bury_or_suspend_cards(&cids, BuryOrSuspendMode::Suspend)
+            .ctx("suspending cards")?;
+        format!("suspended {} card(s)", cids.len())
+    };
+    refresh_note(session, browser, nid)?;
+    browser.set_status(status);
+    Ok(())
+}
+
+/// Steps the flag on every card of the note through Anki's seven colours and back
+/// to none, starting from the first flag any card has.
+pub fn cycle_flag(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
+    let Some(note) = browser.note(nid) else {
+        return Ok(());
+    };
+    let cids = card_ids(note);
+    let next = notes::next_flag(note.flag());
+    session.col.set_card_flag(&cids, next).ctx("setting flag")?;
+    refresh_note(session, browser, nid)?;
+    browser.set_status(if next == 0 {
+        "flag removed".to_string()
+    } else {
+        format!("flagged {}", flag_name(next))
+    });
+    Ok(())
+}
+
+pub fn toggle_mark(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
+    let Some(note) = browser.note(nid) else {
+        return Ok(());
+    };
+    let marked = !note.marked();
+    notes::set_marked(&mut session.col, nid, marked)?;
+    refresh_note(session, browser, nid)?;
+    browser.set_status(if marked { "marked" } else { "unmarked" });
+    Ok(())
+}
+
 /// Runs the browser's query, which happens on every keystroke. An empty query lists
 /// nothing, because the box starts empty and loading the whole collection then would
 /// be wasted work. A search the collection rejects becomes a status message rather
@@ -551,9 +645,7 @@ pub fn run(
                 match outcome {
                     Ok(outcome) => {
                         if outcome == Outcome::Saved {
-                            if let Some(view) = notes::views(&mut session.col, &[nid])?.pop() {
-                                browser.replace_note(view);
-                            }
+                            refresh_note(session, browser, nid)?;
                         }
                         browser.set_status(outcome.message());
                     }
@@ -561,6 +653,9 @@ pub fn run(
                 }
             }
             BrowseAction::Delete(nid) => delete(session, browser, nid)?,
+            BrowseAction::Suspend(nid) => toggle_suspend(session, browser, nid)?,
+            BrowseAction::Flag(nid) => cycle_flag(session, browser, nid)?,
+            BrowseAction::Mark(nid) => toggle_mark(session, browser, nid)?,
             BrowseAction::Undo => match session.col.undo() {
                 Ok(_) => {
                     search(session, browser)?;

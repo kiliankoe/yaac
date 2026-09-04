@@ -242,7 +242,7 @@ impl<'a> Reviewer<'a> {
         let Some(current) = &mut self.current else {
             return Ok(());
         };
-        let next = (current.flag + 1) % 8;
+        let next = notes::next_flag(current.flag);
         self.col
             .set_card_flag(&[current.card_id], next)
             .ctx("setting flag")?;
@@ -262,15 +262,7 @@ impl Reviewer<'_> {
         else {
             return Ok(());
         };
-        if marked {
-            self.col
-                .remove_tags_from_notes(&[note_id], notes::MARKED_TAG)
-                .ctx("unmarking note")?;
-        } else {
-            self.col
-                .add_tags_to_notes(&[note_id], notes::MARKED_TAG)
-                .ctx("marking note")?;
-        }
+        notes::set_marked(self.col, note_id, !marked)?;
         if let Some(current) = &mut self.current {
             current.marked = !marked;
         }

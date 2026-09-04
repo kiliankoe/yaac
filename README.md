@@ -112,7 +112,10 @@ LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, 
 | ctrl-d, ctrl-u, page down/up | scroll the note                                                |
 | e                            | edit the note in `$VISUAL` or `$EDITOR`                        |
 | d                            | delete the note and its cards                                  |
-| u                            | undo the last edit or deletion                                 |
+| s                            | suspend every card of the note, or unsuspend them when all are |
+| f                            | cycle the flag colour on every card of the note                |
+| m                            | mark or unmark the note (Anki's `marked` tag)                  |
+| u                            | undo the last change                                           |
 | r                            | re-transmit and redraw images                                  |
 | esc                          | back to the deck list when opened from it, otherwise quit      |
 | q                            | quit                                                           |

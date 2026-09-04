@@ -5,7 +5,7 @@ use std::path::Path;
 use anki::card::CardId;
 use anki::notes::NoteId;
 use anki_proto::scheduler::bury_or_suspend_cards_request::Mode as BuryOrSuspendMode;
-use common::{add_basic, fresh_collection, yaac_on};
+use common::{add_basic, fresh_collection, json, yaac_on};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -497,5 +497,154 @@ fn the_list_marks_flagged_marked_and_suspended_notes_and_the_header_names_them()
     press(&mut browser, KeyCode::Char('j'));
     let lines = screen(&mut browser, 100, 30, &media);
     assert!(header(&lines).contains("suspended"), "{}", header(&lines));
+    session.close().unwrap();
+}
+
+#[test]
+fn s_f_and_m_act_on_every_card_of_the_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let output = yaac_on(&path)
+        .args([
+            "add",
+            "-n",
+            "Basic (and reversed card)",
+            "-d",
+            "Default",
+            "--json",
+        ])
+        .arg("Front=sol")
+        .arg("Back=sun")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let nid = NoteId(json(&output)[0]["id"].as_i64().unwrap());
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let media = dir.path().join("collection.media");
+    let mut browser = Browser::new("deck:Default");
+    for c in ['s', 'f', 'm'] {
+        assert_eq!(
+            press(&mut browser, KeyCode::Char(c)),
+            BrowseAction::Continue,
+            "nothing to act on before the search ran"
+        );
+    }
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.selected().unwrap().cards.len(), 2);
+    let status = |browser: &mut Browser| screen(browser, 100, 24, &media)[23].clone();
+
+    // s suspends every card; once all are suspended it brings them all back.
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('s')),
+        BrowseAction::Suspend(nid)
+    );
+    browse::toggle_suspend(&mut session, &mut browser, nid).unwrap();
+    let note = browser.selected().unwrap();
+    assert!(note.suspended());
+    assert!(note.cards.iter().all(|card| card.queue == "suspended"));
+    assert!(status(&mut browser).contains("suspended 2 card"));
+    let first = first_card(&mut session, nid.0);
+    session.col.unbury_or_unsuspend_cards(&[first]).unwrap();
+    browse::search(&mut session, &mut browser).unwrap();
+    assert!(!browser.selected().unwrap().suspended());
+    browse::toggle_suspend(&mut session, &mut browser, nid).unwrap();
+    assert!(
+        browser.selected().unwrap().suspended(),
+        "a partly suspended note gets suspended, not unsuspended"
+    );
+    browse::toggle_suspend(&mut session, &mut browser, nid).unwrap();
+    let note = browser.selected().unwrap();
+    assert!(note.cards.iter().all(|card| card.queue == "new"));
+    assert!(status(&mut browser).contains("unsuspended 2 card"));
+
+    // m toggles the marked tag on the note.
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('m')),
+        BrowseAction::Mark(nid)
+    );
+    browse::toggle_mark(&mut session, &mut browser, nid).unwrap();
+    assert!(browser.selected().unwrap().marked());
+    assert_eq!(
+        yaac::notes::get_note(&mut session.col, nid).unwrap().tags,
+        ["marked"]
+    );
+    assert!(status(&mut browser).contains("marked"));
+    browse::toggle_mark(&mut session, &mut browser, nid).unwrap();
+    assert!(!browser.selected().unwrap().marked());
+    assert!(
+        yaac::notes::get_note(&mut session.col, nid)
+            .unwrap()
+            .tags
+            .is_empty()
+    );
+
+    // f steps every card through the seven colours and back to none.
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('f')),
+        BrowseAction::Flag(nid)
+    );
+    browse::cycle_flag(&mut session, &mut browser, nid).unwrap();
+    assert!(
+        browser
+            .selected()
+            .unwrap()
+            .cards
+            .iter()
+            .all(|card| card.flag == 1)
+    );
+    assert!(status(&mut browser).contains("flagged red"));
+    for _ in 0..6 {
+        browse::cycle_flag(&mut session, &mut browser, nid).unwrap();
+    }
+    assert_eq!(browser.selected().unwrap().flag(), 7);
+    browse::cycle_flag(&mut session, &mut browser, nid).unwrap();
+    assert!(
+        browser
+            .selected()
+            .unwrap()
+            .cards
+            .iter()
+            .all(|card| card.flag == 0)
+    );
+    assert!(status(&mut browser).contains("flag removed"));
+    // With flags differing between cards, the first flagged card sets the pace.
+    let second = session.col.storage.all_cards_of_note(nid).unwrap()[1].id();
+    session.col.set_card_flag(&[second], 3).unwrap();
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.selected().unwrap().flag(), 3);
+    browse::cycle_flag(&mut session, &mut browser, nid).unwrap();
+    assert!(
+        browser
+            .selected()
+            .unwrap()
+            .cards
+            .iter()
+            .all(|card| card.flag == 4)
+    );
+
+    // u undoes these like any other change.
+    assert_eq!(press(&mut browser, KeyCode::Char('u')), BrowseAction::Undo);
+    session.col.undo().unwrap();
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.selected().unwrap().flag(), 3);
+
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(lines[28].contains("s suspend"), "{}", lines[28]);
+    press(&mut browser, KeyCode::Char('?'));
+    let lines = screen(&mut browser, 100, 30, &media);
+    assert!(
+        lines.iter().any(|line| line.contains("unsuspend")),
+        "{lines:#?}"
+    );
+
+    // While typing, the letters go into the query.
+    press(&mut browser, KeyCode::Char('q'));
+    press(&mut browser, KeyCode::Char('/'));
+    for c in ['s', 'f', 'm'] {
+        assert_eq!(press(&mut browser, KeyCode::Char(c)), BrowseAction::Search);
+    }
+    assert_eq!(browser.query(), "deck:Defaultsfm");
     session.close().unwrap();
 }

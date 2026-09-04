@@ -114,6 +114,23 @@ pub fn is_marked(tags: &[String]) -> bool {
     tags.iter().any(|tag| tag.eq_ignore_ascii_case(MARKED_TAG))
 }
 
+/// Adds or removes the "marked" tag, the way the desktop's mark toggle does.
+pub fn set_marked(col: &mut Collection, nid: NoteId, marked: bool) -> Result<()> {
+    if marked {
+        col.add_tags_to_notes(&[nid], MARKED_TAG)
+            .ctx("marking note")?;
+    } else {
+        col.remove_tags_from_notes(&[nid], MARKED_TAG)
+            .ctx("unmarking note")?;
+    }
+    Ok(())
+}
+
+/// The flag after `flag` when cycling: through Anki's seven colours, then none.
+pub fn next_flag(flag: u32) -> u32 {
+    (flag + 1) % 8
+}
+
 /// Anki's flag colours by number; 0 is no flag.
 pub fn flag_name(flag: u32) -> &'static str {
     match flag {
