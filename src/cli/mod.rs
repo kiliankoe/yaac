@@ -1,4 +1,5 @@
 mod add;
+mod browse;
 mod decks;
 mod delete;
 mod edit;
@@ -70,6 +71,8 @@ enum Command {
     Sync(sync::SyncArgs),
     /// Review due cards in the terminal.
     Review(review::ReviewArgs),
+    /// Search notes and edit them in the terminal.
+    Browse(browse::BrowseArgs),
 }
 
 /// Everything a command needs besides its own arguments.
@@ -107,6 +110,7 @@ pub fn run() -> ExitCode {
             Command::Logout => logout::run(&ctx),
             Command::Sync(args) => sync::run(&ctx, args),
             Command::Review(args) => review::run(&ctx, args),
+            Command::Browse(args) => browse::run(&ctx, args),
         }
     });
     match result {

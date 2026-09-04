@@ -56,6 +56,41 @@ pub struct CardView {
     pub flag: u32,
 }
 
+impl CardView {
+    /// The scheduling facts worth a glance, in display order: queue, due date,
+    /// interval, reviews and lapses, flag. Zero values are left out.
+    pub fn stats(&self) -> Vec<String> {
+        let mut parts = vec![self.queue.to_string()];
+        if let Some(days) = self.due_in_days {
+            parts.push(due_phrase(days));
+        }
+        if self.interval_days > 0 {
+            parts.push(format!("ivl {}d", self.interval_days));
+        }
+        if self.reps > 0 {
+            parts.push(format!("reps {}  lapses {}", self.reps, self.lapses));
+        }
+        if self.flag > 0 {
+            parts.push(format!("flag {}", flag_name(self.flag)));
+        }
+        parts
+    }
+}
+
+/// Anki's flag colours by number; 0 is no flag.
+pub fn flag_name(flag: u32) -> &'static str {
+    match flag {
+        1 => "red",
+        2 => "orange",
+        3 => "green",
+        4 => "blue",
+        5 => "pink",
+        6 => "turquoise",
+        7 => "purple",
+        _ => "none",
+    }
+}
+
 /// Builds views for several notes at once so the scheduler day is computed only once.
 pub fn views(col: &mut Collection, nids: &[NoteId]) -> Result<Vec<NoteView>> {
     let days_elapsed = col
@@ -345,20 +380,10 @@ impl fmt::Display for NoteDetails {
                 write!(
                     f,
                     "card      {}  {}  {}",
-                    card.id, card.template, card.queue
+                    card.id,
+                    card.template,
+                    card.stats().join("  ")
                 )?;
-                if let Some(days) = card.due_in_days {
-                    write!(f, "  {}", due_phrase(days))?;
-                }
-                if card.interval_days > 0 {
-                    write!(f, "  ivl {}d", card.interval_days)?;
-                }
-                if card.reps > 0 {
-                    write!(f, "  reps {}  lapses {}", card.reps, card.lapses)?;
-                }
-                if card.flag > 0 {
-                    write!(f, "  flag {}", card.flag)?;
-                }
                 if card.deck != note.deck {
                     write!(f, "  deck {}", card.deck)?;
                 }
@@ -377,7 +402,8 @@ fn due_phrase(days: i32) -> String {
     }
 }
 
-fn truncate(text: &str, max: usize) -> String {
+/// At most `max` characters, the last one an ellipsis when something was cut.
+pub fn truncate(text: &str, max: usize) -> String {
     let mut chars = text.chars();
     let head: String = chars.by_ref().take(max).collect();
     if chars.next().is_some() {

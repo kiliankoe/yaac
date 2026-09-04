@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use clap::Args;
 
 use crate::cli::Context;
+use crate::editor::{self, Editor, Outcome};
 use crate::notes::{self, NoteDetails};
 use crate::output;
 use crate::session::AnkiResultExt;
@@ -13,24 +14,39 @@ pub struct EditArgs {
 
     /// New field values as NAME=VALUE, or bare values in field order. Fields not
     /// mentioned keep their content.
-    #[arg(value_name = "FIELD", required = true)]
+    #[arg(
+        value_name = "FIELD",
+        required_unless_present = "editor",
+        conflicts_with = "editor"
+    )]
     fields: Vec<String>,
+
+    /// Open the note in $VISUAL or $EDITOR instead: tags on top, one heading per
+    /// field, <br> shown as line breaks. Empty the file to abort.
+    #[arg(long, short = 'e')]
+    editor: bool,
 }
 
 pub fn run(ctx: &Context, args: EditArgs) -> Result<()> {
     let nid = notes::note_ids(std::slice::from_ref(&args.id))?[0];
     let mut session = ctx.open()?;
     let col = &mut session.col;
-    let mut note = notes::get_note(col, nid)?;
-    let notetype = notes::get_notetype(col, &note)?;
-    let changes = notes::parse_field_args(&notetype, &args.fields)?;
-    if changes.is_empty() {
-        bail!("no field values given");
+    if args.editor {
+        if editor::edit_note(col, nid, &Editor::from_env())? == Outcome::Aborted {
+            bail!("aborted");
+        }
+    } else {
+        let mut note = notes::get_note(col, nid)?;
+        let notetype = notes::get_notetype(col, &note)?;
+        let changes = notes::parse_field_args(&notetype, &args.fields)?;
+        if changes.is_empty() {
+            bail!("no field values given");
+        }
+        for (idx, value) in changes {
+            note.set_field(idx, value).ctx("setting field")?;
+        }
+        col.update_note(&mut note).ctx("updating note")?;
     }
-    for (idx, value) in changes {
-        note.set_field(idx, value).ctx("setting field")?;
-    }
-    col.update_note(&mut note).ctx("updating note")?;
     let views = notes::views(col, &[nid])?;
     session.close()?;
     output::emit(&NoteDetails(views), ctx.json)

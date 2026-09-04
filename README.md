@@ -22,10 +22,12 @@ yaac add -n Basic -d Spanish -t vocab Front="el gato/la gata" Back="cat"
 yaac add -n Basic -d Default "bare values" "in field order"
 yaac add --from-json notes.json            # one object or an array; "-" for stdin
 yaac edit NOTE_ID Back="better answer"     # unmentioned fields keep their content
+yaac edit NOTE_ID --editor                 # the note as a text file in $VISUAL or $EDITOR
 yaac tag add "todo review" NOTE_ID...      # or: yaac tag remove TAGS NOTE_ID...
 yaac delete NOTE_ID... [--yes]             # lists the notes, then asks; --yes when piped
 
 yaac review [DECK]                         # review in the terminal; picks a deck when none is given
+yaac browse [QUERY]                        # search, read, and edit notes in the terminal
 
 yaac login [USERNAME]                      # asks for the password; stores AnkiWeb's session key
 yaac sync                                  # collection and media; asks if a full sync is needed
@@ -53,6 +55,7 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 | s            | suspend the card                                                        |
 | b            | bury the card until tomorrow                                            |
 | f            | cycle the card's flag colour                                            |
+| e            | edit the note in `$EDITOR` (see below), then show the card again        |
 | r            | re-transmit and redraw the card's images                                |
 | esc          | back to the deck list, with refreshed counts                            |
 | q            | quit; the session summary is printed afterwards                         |
@@ -60,6 +63,37 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text with the notetype's formatting where a terminal can show it: alignment, bold, italic, underline, small text, colours, lists, cloze deletions. Audio appears as a label.
 
 Images are drawn inline. yaac asks the terminal which graphics protocol it supports (Kitty, Sixel, or iTerm2) and falls back to half-block characters everywhere else, including Terminal.app and Alacritty. Kitty graphics work inside tmux when `allow-passthrough on` is set. tmux needs care there: it forwards placeholder cells without the marks that tell the terminal which part of the image a cell shows, so yaac sends those cells to the outer terminal directly whenever an image appears or moves (and on the two frames after, in case tmux dropped one), and it drops pane output that arrives faster than it can forward, so images are sent as PNG in paced bursts. `r` re-sends the current card's images if one still got lost. SVG files are rasterised with system fonts. Cards of Anki's built-in Image Occlusion notetype get their masks painted in: hidden shapes are covered on the question side and outlined on the answer side, with "hide all, guess one" respected. Set `images` in the config to `kitty`, `sixel`, `iterm2`, or `halfblocks` to skip the probe, or `off` for labels only.
+
+### Browse and edit
+
+`yaac browse` shows a search box, the matching notes sorted by their sort field, and the selected note's fields, tags, and cards. The panes sit side by side on wide terminals and stack on narrow ones. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images in fields are drawn the same way as in review.
+
+| Key                          | Action                                                              |
+| ---------------------------- | ------------------------------------------------------------------- |
+| /                            | focus the search box; enter or esc leaves it, ctrl-u clears it      |
+| j/k, arrows, g/G             | move through the results; arrows also work while typing             |
+| ctrl-d, ctrl-u, page down/up | scroll the note                                                     |
+| e                            | edit the note in `$VISUAL` or `$EDITOR`                             |
+| u                            | undo the last edit                                                  |
+| r                            | re-transmit and redraw images                                       |
+| q                            | quit                                                                |
+
+Editing, from here, from the review screen with `e`, or with `yaac edit NOTE_ID --editor`, writes the note to a temporary markdown file and opens the editor on it:
+
+```
+<!-- yaac: note 1693526400000 (Basic). Save and quit to apply, empty the file to abort. -->
+tags: vocab animals
+
+# Front
+
+el gato
+
+# Back
+
+cat
+```
+
+Fields are HTML as Anki stores them, with `<br>` shown as a line break and turned back into `<br>` on save. Everything else (images, styling, cloze markers) stays untouched. A field whose text you did not change is written back exactly as it was, a field whose heading you delete keeps its value, and `tags:` takes space-separated tags. Emptying the file aborts. A file that does not parse, because of an unknown heading say, is reopened with the error at the top. The change goes through Anki's own update path, so cards are regenerated and `u` undoes it. `$VISUAL` is tried before `$EDITOR`, either may include arguments (`code --wait`), and `vi` is the fallback.
 
 ### Sync
 

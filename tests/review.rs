@@ -121,7 +121,7 @@ fn the_screen_centers_the_card_and_colors_the_answers() {
     let mut images = Images::disabled(dir.path().join("collection.media"));
 
     terminal
-        .draw(|frame| review::draw(frame, &reviewer, &mut images))
+        .draw(|frame| review::draw(frame, &reviewer, &mut images, None))
         .unwrap();
     let screen = rows(terminal.backend().buffer());
     assert!(screen[0].contains("Default"), "deck in the status line");
@@ -146,7 +146,7 @@ fn the_screen_centers_the_card_and_colors_the_answers() {
 
     reviewer.reveal();
     terminal
-        .draw(|frame| review::draw(frame, &reviewer, &mut images))
+        .draw(|frame| review::draw(frame, &reviewer, &mut images, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let screen = rows(&buffer);
@@ -209,7 +209,7 @@ fn images_render_as_half_blocks_or_labels() {
 
     let mut labels = Images::disabled(&media);
     terminal
-        .draw(|frame| review::draw(frame, &reviewer, &mut labels))
+        .draw(|frame| review::draw(frame, &reviewer, &mut labels, None))
         .unwrap();
     let screen = rows(terminal.backend().buffer());
     assert!(screen.iter().any(|line| line.contains("Which colour?")));
@@ -221,7 +221,7 @@ fn images_render_as_half_blocks_or_labels() {
 
     let mut blocks = Images::new(Some(ratatui_image::picker::Picker::halfblocks()), &media);
     terminal
-        .draw(|frame| review::draw(frame, &reviewer, &mut blocks))
+        .draw(|frame| review::draw(frame, &reviewer, &mut blocks, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let screen = rows(&buffer);
@@ -244,4 +244,46 @@ fn images_render_as_half_blocks_or_labels() {
         !screen.iter().any(|line| line.contains("[image:")),
         "no label when drawn"
     );
+}
+
+#[test]
+fn editing_the_note_rerenders_the_card_and_is_undoable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    add_basic(&path, "old question", "answer");
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        "sed 's/^old question$/new question/' \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n",
+    )
+    .unwrap();
+    let editor = yaac::editor::Editor::new(format!("sh {}", script.display()));
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    reviewer.reveal();
+
+    let outcome = reviewer.edit(&editor).unwrap();
+    assert_eq!(outcome, Some(yaac::editor::Outcome::Saved));
+    let current = reviewer.current.as_ref().unwrap();
+    assert!(
+        current.question.contains("new question"),
+        "{}",
+        current.question
+    );
+    assert!(current.revealed, "the side shown stays the same");
+    assert_eq!(
+        reviewer.edit(&editor).unwrap(),
+        Some(yaac::editor::Outcome::Unchanged),
+        "the same edit again changes nothing"
+    );
+
+    assert!(reviewer.undo().unwrap(), "the edit is on the undo stack");
+    let current = reviewer.current.as_ref().unwrap();
+    assert!(
+        current.question.contains("old question"),
+        "{}",
+        current.question
+    );
+    drop(reviewer);
+    session.close().unwrap();
 }

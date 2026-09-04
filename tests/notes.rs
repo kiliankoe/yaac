@@ -448,3 +448,58 @@ fn search_help_doubles_as_a_syntax_cheat_sheet() {
         .stdout(predicate::str::contains("rated:30:1"))
         .stdout(predicate::str::contains("docs.ankiweb.net/searching"));
 }
+
+#[test]
+fn edit_with_the_editor_round_trips_the_note_through_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let id = add_basic(&path, "question", "answer<br>two");
+    // A stand-in editor that rewrites the file the way a person would. Its first run
+    // breaks a heading, so the second run sees the error yaac put at the top.
+    let script = dir.path().join("editor.sh");
+    std::fs::write(
+        &script,
+        r#"set -e
+f="$1"
+if grep -q '^<!-- yaac error:' "$f"; then
+  sed 's/^# Bakc$/# Back/' "$f" > "$f.tmp"
+else
+  sed -e 's/^# Back$/# Bakc/' -e 's/^two$/three/' -e 's/^tags: *$/tags: edited/' "$f" > "$f.tmp"
+fi
+mv "$f.tmp" "$f"
+"#,
+    )
+    .unwrap();
+    let editor = format!("sh {}", script.display());
+
+    let output = yaac_on(&path)
+        .env("EDITOR", &editor)
+        .args(["edit", "--editor", &id.to_string(), "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let edited = json(&output);
+    assert_eq!(edited[0]["fields"]["Front"], "question");
+    assert_eq!(edited[0]["fields"]["Back"], "answer<br>three");
+    assert_eq!(edited[0]["tags"], serde_json::json!(["edited"]));
+
+    std::fs::write(&script, ": > \"$1\"\n").unwrap();
+    yaac_on(&path)
+        .env("EDITOR", &editor)
+        .args(["edit", "-e", &id.to_string()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("aborted"));
+    yaac_on(&path)
+        .env("EDITOR", "false")
+        .args(["edit", "-e", &id.to_string()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("exited"));
+    yaac_on(&path)
+        .args(["edit", "-e", &id.to_string(), "Back=x"])
+        .assert()
+        .code(2);
+}

@@ -25,6 +25,8 @@ pub fn yaac() -> Command {
     cmd.env_remove("YAAC_COLLECTION")
         .env_remove("YAAC_CONFIG")
         .env_remove("ANKI_BASE")
+        .env_remove("VISUAL")
+        .env_remove("EDITOR")
         .env("XDG_CONFIG_HOME", "/nonexistent");
     cmd
 }

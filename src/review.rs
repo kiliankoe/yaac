@@ -16,6 +16,7 @@ use anki_proto::cards::Card as CardProto;
 use anki_proto::scheduler::bury_or_suspend_cards_request::Mode as BuryOrSuspendMode;
 use anyhow::{Result, anyhow};
 
+use crate::editor::{self, Editor, Outcome};
 use crate::notes;
 use crate::render::html::nodes_to_html;
 use crate::session::{AnkiResultExt, anki_error};
@@ -94,10 +95,7 @@ impl<'a> Reviewer<'a> {
             None => None,
             Some(queued) => {
                 let card_id = queued.card.id();
-                let rendered = self
-                    .col
-                    .render_existing_card(card_id, false, false)
-                    .ctx("rendering card")?;
+                let (question, answer, css) = render(self.col, card_id)?;
                 let labels: [String; 4] = self
                     .col
                     .describe_next_states(&queued.states)
@@ -114,9 +112,9 @@ impl<'a> Reviewer<'a> {
                         1 | 3 | 4 => Kind::Learning,
                         _ => Kind::Review,
                     },
-                    question: nodes_to_html(&rendered.qnodes, false),
-                    answer: nodes_to_html(&rendered.anodes, true),
-                    css: rendered.css,
+                    question,
+                    answer,
+                    css,
                     labels,
                     flag: proto.flags,
                     revealed: false,
@@ -140,6 +138,31 @@ impl<'a> Reviewer<'a> {
         if let Some(current) = &mut self.current {
             current.revealed = true;
         }
+    }
+
+    /// Opens the current card's note in the editor and shows the card again with the
+    /// new text. Scheduling, the timer, and the revealed side are untouched. None when
+    /// there is no card.
+    pub fn edit(&mut self, editor: &Editor) -> Result<Option<Outcome>> {
+        let Some(nid) = self.current.as_ref().map(|current| current.note_id) else {
+            return Ok(None);
+        };
+        let outcome = editor::edit_note(self.col, nid, editor)?;
+        if outcome == Outcome::Saved {
+            self.rerender()?;
+        }
+        Ok(Some(outcome))
+    }
+
+    /// Renders the current card again, after its note changed.
+    pub fn rerender(&mut self) -> Result<()> {
+        if let Some(current) = &mut self.current {
+            let (question, answer, css) = render(self.col, current.card_id)?;
+            current.question = question;
+            current.answer = answer;
+            current.css = css;
+        }
+        Ok(())
     }
 
     /// Answers the current card with the state rslib computed for that rating. Time
@@ -214,4 +237,16 @@ impl<'a> Reviewer<'a> {
         current.flag = next;
         Ok(())
     }
+}
+
+/// Question and answer HTML plus the notetype's stylesheet for a card.
+fn render(col: &mut Collection, card_id: CardId) -> Result<(String, String, String)> {
+    let rendered = col
+        .render_existing_card(card_id, false, false)
+        .ctx("rendering card")?;
+    Ok((
+        nodes_to_html(&rendered.qnodes, false),
+        nodes_to_html(&rendered.anodes, true),
+        rendered.css,
+    ))
 }

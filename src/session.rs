@@ -107,6 +107,14 @@ impl Session {
         })
     }
 
+    /// The profile's media folder, next to the collection file.
+    pub fn media_dir(&self) -> PathBuf {
+        self.path
+            .parent()
+            .map(|dir| dir.join("collection.media"))
+            .unwrap_or_default()
+    }
+
     /// Takes a backup right now, regardless of the backup interval, and waits for it.
     pub fn backup_now(&mut self) -> Result<()> {
         if let Some(pending) = self.start_backup(true)? {

@@ -4,6 +4,7 @@
 pub mod cli;
 pub mod config;
 pub mod decks;
+pub mod editor;
 pub mod notes;
 pub mod output;
 pub mod render;

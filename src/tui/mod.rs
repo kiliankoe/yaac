@@ -1,5 +1,7 @@
 //! Terminal setup shared by the interactive screens.
 
+pub mod blocks;
+pub mod browse;
 pub mod decks;
 pub mod images;
 pub mod kitty;
@@ -10,6 +12,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::execute;
+use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use ratatui::DefaultTerminal;
 
 /// Raw mode and the alternate screen, undone on drop so errors and early returns leave
@@ -19,6 +23,19 @@ pub struct Terminal(DefaultTerminal);
 impl Terminal {
     pub fn open() -> Self {
         Self(ratatui::init())
+    }
+
+    /// Hands the terminal to something else, such as an editor, while `f` runs: raw
+    /// mode and the alternate screen are left and re-entered around it, and the next
+    /// draw repaints everything.
+    pub fn suspend<T>(&mut self, f: impl FnOnce() -> T) -> Result<T> {
+        ratatui::restore();
+        let result = f();
+        enable_raw_mode().context("re-entering raw mode")?;
+        execute!(std::io::stdout(), EnterAlternateScreen)
+            .context("re-entering the alternate screen")?;
+        self.0.clear().context("clearing the screen")?;
+        Ok(result)
     }
 }
 

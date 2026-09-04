@@ -6,17 +6,17 @@ use anki::scheduler::answering::Rating;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect, Size};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
-use ratatui_image::Image;
+use ratatui::widgets::Paragraph;
 
-use crate::render::html::image_label;
-use crate::render::occlusion::Mask;
+use crate::editor::Editor;
+use crate::notes::flag_name;
 use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::review::{Kind, Reviewer};
-use crate::tui::images::{Encoded, Images};
+use crate::tui::blocks;
+use crate::tui::images::Images;
 use crate::tui::{Terminal, next_key};
 
 pub const AGAIN: Color = Color::Red;
@@ -40,18 +40,36 @@ pub fn run(
     reviewer: &mut Reviewer,
     images: &mut Images,
 ) -> Result<Action> {
+    let mut status: Option<String> = None;
     loop {
-        terminal.draw(|frame| draw(frame, reviewer, images))?;
+        terminal.draw(|frame| draw(frame, reviewer, images, status.as_deref()))?;
         images.end_frame();
-        if let Some(key) = next_key(Duration::from_millis(250))? {
-            if key.code == KeyCode::Char('r') {
+        let Some(key) = next_key(Duration::from_millis(250))? else {
+            continue;
+        };
+        match key.code {
+            KeyCode::Char('r') => {
                 images.clear();
                 continue;
             }
-            match handle(reviewer, key)? {
-                Action::Continue => {}
-                action => return Ok(action),
+            // Editing leaves the alternate screen, so it lives here rather than in
+            // `handle`, which tests drive without a terminal.
+            KeyCode::Char('e') => {
+                let editor = Editor::from_env();
+                let outcome = terminal.suspend(|| reviewer.edit(&editor))?;
+                images.clear();
+                status = match outcome {
+                    Ok(Some(outcome)) => Some(outcome.message().to_string()),
+                    Ok(None) => None,
+                    Err(err) => Some(format!("edit failed: {err:#}")),
+                };
+                continue;
             }
+            _ => status = None,
+        }
+        match handle(reviewer, key)? {
+            Action::Continue => {}
+            action => return Ok(action),
         }
     }
 }
@@ -80,7 +98,7 @@ pub fn handle(reviewer: &mut Reviewer, key: KeyEvent) -> Result<Action> {
     Ok(Action::Continue)
 }
 
-pub fn draw(frame: &mut Frame, reviewer: &Reviewer, images: &mut Images) {
+pub fn draw(frame: &mut Frame, reviewer: &Reviewer, images: &mut Images, status: Option<&str>) {
     images.begin_frame();
     let [top, body, bottom] = Layout::vertical([
         Constraint::Length(1),
@@ -90,7 +108,7 @@ pub fn draw(frame: &mut Frame, reviewer: &Reviewer, images: &mut Images) {
     .areas(frame.area());
     draw_status(frame, top, reviewer);
     draw_card(frame, body, reviewer, images);
-    draw_actions(frame, bottom, reviewer);
+    draw_actions(frame, bottom, reviewer, status);
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
@@ -142,17 +160,6 @@ fn draw_status(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
     frame.render_widget(Paragraph::new(right), right_area);
 }
 
-/// A block ready to place: either wrapped text or an image of a known cell size.
-enum Placed {
-    Text(Box<Paragraph<'static>>, u16),
-    Image {
-        src: String,
-        size: Size,
-        align: Option<Alignment>,
-        masks: Vec<Mask>,
-    },
-}
-
 fn draw_card(frame: &mut Frame, area: Rect, reviewer: &Reviewer, images: &mut Images) {
     let blocks = match &reviewer.current {
         Some(current) => {
@@ -176,129 +183,20 @@ fn draw_card(frame: &mut Frame, area: Rect, reviewer: &Reviewer, images: &mut Im
         width: area.width.saturating_sub(4).max(1),
         height: area.height,
     };
-    let placed = place(blocks, inner, images);
-    let total: u16 = placed
-        .iter()
-        .map(|block| match block {
-            Placed::Text(_, height) => *height,
-            Placed::Image { size, .. } => size.height,
-        })
-        .sum();
-    let mut y = inner.y + inner.height.saturating_sub(total) / 2;
-    for block in placed {
-        let remaining = (inner.y + inner.height).saturating_sub(y);
-        if remaining == 0 {
-            break;
-        }
-        match block {
-            Placed::Text(paragraph, height) => {
-                let rect = Rect {
-                    y,
-                    height: height.min(remaining),
-                    ..inner
-                };
-                frame.render_widget(*paragraph, rect);
-                y += height;
-            }
-            Placed::Image {
-                src,
-                size,
-                align,
-                masks,
-            } => {
-                let x = match align {
-                    Some(Alignment::Left) => inner.x,
-                    Some(Alignment::Right) => inner.x + inner.width - size.width,
-                    _ => inner.x + (inner.width - size.width) / 2,
-                };
-                let rect = Rect {
-                    x,
-                    y,
-                    width: size.width,
-                    height: size.height.min(remaining),
-                };
-                match images.protocol(&src, size, &masks) {
-                    Some(Encoded::Native(protocol)) => {
-                        frame.render_widget(Image::new(protocol), rect);
-                        images.mark_placed(&src, rect, None);
-                    }
-                    Some(Encoded::Kitty(placement)) => {
-                        frame.render_widget(placement, rect);
-                        let placement = placement.clone();
-                        images.mark_placed(&src, rect, Some(placement));
-                    }
-                    None => {}
-                }
-                y += size.height;
-            }
-        }
-    }
+    blocks::draw(
+        frame,
+        inner,
+        blocks,
+        images,
+        blocks::Options {
+            align: Alignment::Center,
+            vertical_center: true,
+            scroll: 0,
+        },
+    );
 }
 
-/// Measures every block against the area. Images get at most half the height each and
-/// never more than what the text leaves over; unusable images become labels.
-fn place(blocks: Vec<Block>, inner: Rect, images: &mut Images) -> Vec<Placed> {
-    let text_height = |lines: &[Line<'static>]| {
-        Paragraph::new(Text::from(lines.to_vec()))
-            .wrap(Wrap { trim: true })
-            .line_count(inner.width) as u16
-    };
-    let text_rows: u16 = blocks
-        .iter()
-        .map(|block| match block {
-            Block::Text(lines) => text_height(lines),
-            Block::Image { .. } => 0,
-        })
-        .sum();
-    let image_count = blocks
-        .iter()
-        .filter(|block| matches!(block, Block::Image { .. }))
-        .count()
-        .max(1) as u16;
-    let per_image = (inner.height.saturating_sub(text_rows) / image_count)
-        .min(inner.height / 2)
-        .max(1);
-
-    let mut placed = Vec::new();
-    let push_text = |placed: &mut Vec<Placed>, lines: Vec<Line<'static>>| {
-        let height = text_height(&lines);
-        let paragraph = Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: true })
-            .alignment(Alignment::Center);
-        placed.push(Placed::Text(Box::new(paragraph), height));
-    };
-    for block in blocks {
-        match block {
-            Block::Text(lines) => push_text(&mut placed, lines),
-            Block::Image { src, align, masks } => {
-                let available = Size::new(inner.width, per_image);
-                match images.size_for(&src, available) {
-                    Some(size) => placed.push(Placed::Image {
-                        src,
-                        size,
-                        align,
-                        masks,
-                    }),
-                    None => {
-                        let mut label = image_label(&src);
-                        if let Some(problem) = images.problem(&src) {
-                            label = format!("{label} ({problem})");
-                        }
-                        let mut line =
-                            Line::from(Span::styled(label, Style::new().fg(Color::Cyan)));
-                        if let Some(align) = align {
-                            line = line.alignment(align);
-                        }
-                        push_text(&mut placed, vec![line]);
-                    }
-                }
-            }
-        }
-    }
-    placed
-}
-
-fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
+fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer, status: Option<&str>) {
     let primary = match &reviewer.current {
         Some(current) if current.revealed => {
             let mut spans = vec![Span::raw(" ")];
@@ -333,11 +231,15 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
         ]),
     };
     let mut secondary = vec![
-        Span::raw(" u undo   s suspend   b bury   f flag   r redraw   esc decks   q quit").dim(),
+        Span::raw(" u undo   s suspend   b bury   f flag   e edit   r redraw   esc decks   q quit")
+            .dim(),
     ];
     if let Some(flag) = reviewer.current.as_ref().map(|c| c.flag).filter(|&f| f > 0) {
         secondary.push(Span::raw("   flag: ").dim());
         secondary.push(Span::raw(flag_name(flag)).fg(flag_color(flag)));
+    }
+    if let Some(status) = status {
+        secondary.push(Span::raw(format!("   {status}")).italic());
     }
     frame.render_widget(
         Paragraph::new(Text::from(vec![primary, Line::from(secondary)])),
@@ -345,20 +247,7 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer) {
     );
 }
 
-fn flag_name(flag: u32) -> &'static str {
-    match flag {
-        1 => "red",
-        2 => "orange",
-        3 => "green",
-        4 => "blue",
-        5 => "pink",
-        6 => "turquoise",
-        7 => "purple",
-        _ => "none",
-    }
-}
-
-fn flag_color(flag: u32) -> Color {
+pub fn flag_color(flag: u32) -> Color {
     match flag {
         1 => Color::Red,
         2 => Color::Rgb(255, 140, 0),
