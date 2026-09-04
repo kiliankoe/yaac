@@ -4,6 +4,13 @@ A terminal Anki client in Rust. It embeds Anki's own Rust backend (rslib), so se
 
 ## Installation
 
+### With Homebrew
+
+```
+brew tap kiliankoe/yaac https://github.com/kiliankoe/yaac
+brew install kiliankoe/yaac/yaac
+```
+
 ### From source
 
 ```
@@ -33,8 +40,6 @@ nixpkgs.overlays = [ inputs.yaac.overlays.default ];   # → pkgs.yaac
 # or reference the package directly
 environment.systemPackages = [ inputs.yaac.packages.${system}.yaac ];
 ```
-
-`cargo install` and a Homebrew formula are planned.
 
 ## Usage
 
