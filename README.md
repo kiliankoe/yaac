@@ -1,223 +1,131 @@
 # yaac - Yet Another Anki CLI
 
-A terminal Anki client in Rust. It embeds Anki's own Rust backend (rslib), so search, scheduling, card generation, and AnkiWeb sync are Anki's, not reimplementations.
+A terminal Anki client, written in Rust, because that allows embedding Anki's own Rust backend (rslib). Search, scheduling, card generation, AnkiWeb sync, ..., it's all Anki's own stuff, this is just a different frontend.
+
+The main motivation for creating this was that I wanted something that opens quicker, doesn't bring me out of the terminal and is easy to script against.
+
+There's quite a few alternatives to this, I tried several, but nothing quite matched what I was looking for. Please do have a look around if there's a better fit for your needs though, many people have spent a lot of time interfacing with Anki and there might be a great fit for your specific use-case elsewhere.
+
+Full disclosure: This was mostly implemented with the help of agentic coding tools. It is very much what I wanted to have for my needs and it wouldn't exist otherwise. I'm sorry if that's a dealbreaker for you. This readme however is not written by AI, maybe that helps at least.
 
 ## Installation
 
-### With Homebrew
+### Nix
 
+```nix
+nix run github:kiliankoe/yaac -- info
 ```
+
+Just add the flake input and do what you need - you're using Nix, you know how your setup works.
+
+```nix
+inputs.yaac.url = "github:kiliankoe/yaac"
+```
+
+The repo provides a devshell as well if you want to contribute.
+
+### Homebrew
+
+```sh
 brew tap kiliankoe/yaac https://github.com/kiliankoe/yaac
 brew install kiliankoe/yaac/yaac
 ```
 
-### From source
+### From Source
 
-```
+```sh
 git clone https://github.com/kiliankoe/yaac
 cd yaac
 cargo build --release
 ./target/release/yaac --help
 ```
 
-The build needs a Rust toolchain (1.86 or newer) and `protoc`, and the first one compiles Anki's backend, which takes a few minutes. With nix, `direnv allow` (or `nix develop`) provides the toolchain and `protoc`.
-
-### With nix
-
-The flake exposes `packages.yaac` (also `default`) and `overlays.default`:
-
-```
-nix run github:kiliankoe/yaac -- info      # try it
-```
-
-In a NixOS, nix-darwin, or home-manager configuration:
-
-```nix
-# flake input
-inputs.yaac.url = "github:kiliankoe/yaac";
-# then either consume the overlay …
-nixpkgs.overlays = [ inputs.yaac.overlays.default ];   # → pkgs.yaac
-# or reference the package directly
-environment.systemPackages = [ inputs.yaac.packages.${system}.yaac ];
-```
+The build needs Rust 1.86 or newer and `protoc`.
 
 ## Usage
 
-Anki desktop must be closed while yaac runs. Anki's backend takes an exclusive lock on the collection, in both directions.
+Anki has to be closed while yaac runs.
 
-```
-yaac                                       # review; the default when no command is given
-yaac info                                  # location, counts, cards due today
-yaac decks                                 # decks with today's due counts
-yaac notetypes                             # notetypes with fields and card templates
-yaac stats [QUERY] [--all]                 # today, calendar, retention, and the rest of the desktop's stats screen
+```sh
+# Open the deck list and review mode TUI
+yaac
 
-yaac search deck:Spanish is:due            # Anki search syntax, words are joined
-yaac search tag:todo --ids                 # only ids, one per line, for piping
-yaac show NOTE_ID...                       # all fields and cards; "-" reads ids from stdin
+# Browse notes, can also be opened from deck liste via `b`
+yaac browse
 
+yaac stats
+
+# Search uses the same syntax as Anki
+yaac search deck:Spanish is:due
+# output only note ids, one per line, for piping
+yaac search tag:todo --ids
+# all note details, can also read from stdin
+yaac show [note-id]
+
+# Managing notes
 yaac add -n Basic -d Spanish -t vocab Front="el gato/la gata" Back="cat"
-yaac add -n Basic -d Default "bare values" "in field order"
-yaac add --from-json notes.json            # one object or an array; "-" for stdin
-yaac edit NOTE_ID Back="better answer"     # unmentioned fields keep their content
-yaac edit NOTE_ID --editor                 # the note as a text file in $VISUAL or $EDITOR
-yaac tag add "todo review" NOTE_ID...      # or: yaac tag remove TAGS NOTE_ID...
-yaac delete NOTE_ID... [--yes]             # lists the notes, then asks; --yes when piped
+yaac add -n Basic -d Spanish "bare values" "in field order"
+yaac edit [note-id] Back="better answer"
+# opens in $EDITOR
+yaac edit [note-id] --editor
+yaac tag add "todo review" [note-id]
+yaac delete [note-id]
 
-yaac review [DECK]                         # review in the terminal; shows deck picker when none is given
-yaac browse [QUERY]                        # search, read, and edit notes
+# piping composes nicely with `-` to read from stdin
+yaac search [query] --ids | yaac tag add later -
 
-yaac login [USERNAME]                      # asks for the password; stores AnkiWeb's session key
-yaac sync                                  # collection and media; asks if a full sync is needed
-yaac sync --full-upload | --full-download  # pick a side explicitly; --yes skips the question
-yaac logout
+yaac login [username]
+yaac sync
 ```
 
-Every command accepts `--json` for machine-readable output. `--collection PATH` (or `YAAC_COLLECTION`) picks a specific `collection.anki2`; otherwise the config value is used, and failing that the single profile folder under the Anki data directory (`~/Library/Application Support/Anki2` on macOS, `~/.local/share/Anki2` on Linux, or `$ANKI_BASE`). yaac refuses to guess when there are several profiles and never creates a collection.
+The help output is extensive and should help you navigate the CLI. The TUI shows available commands in the status line at the bottom or everything when pressing `?`.
 
-Field values are stored as HTML, exactly as given. `add` runs Anki's own checks: an empty first field, a duplicate first field (override with `--allow-duplicate`), and cloze markers that do not match the notetype are rejected.
-
-Ids for `show`, `tag`, and `delete` can be passed as arguments or read from stdin with `-`, so `yaac search ... --ids | yaac tag add later -` works.
-
-After any change yaac takes a backup into the profile's `backups/` folder, following the collection's own backup settings, the same way the desktop does on exit.
+Every command accepts `--json` for machine-readable output.
 
 ### Review
 
-`yaac review` (or a bare `yaac`) opens a deck picker with today's counts, or goes straight into a deck named on the command line. In the picker, `/` filters decks by name, `s` runs a normal and media sync without leaving the screen (a full sync is left to `yaac sync`, where the direction is confirmed), `a` adds a note to the highlighted deck (a notetype chooser, then the editor, see below), `A` does the same with the notetype used last (or `default_notetype` from the config) and skips the chooser, `b` opens browse on the highlighted deck's notes, enter starts reviewing, and `q` quits. The review screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
+As mentioned above, use `yaac`/`yaac review` to open the review TUI and use it like normal Anki. It schedules the same as Anki's own backend, intervals, learning steps, daily limits, everything matches Anki. yaac tries its best to match your notes formatting, but please open an issue if something looks off, rendering HTML/CSS on the terminal is interesting. Things like alignment, bold, italic, underline, small text, colours, lists, and cloze deletions should work. Audio doesn't, but images (SVGs as well) and LaTeX should render inline. The latter is supported in two different modes, simple formulas should render inline as unicode (`\(\alpha^2\)` becomes `α²`), more complicated stuff as an image.
 
-| Key          | Action                                                                  |
-| ------------ | ----------------------------------------------------------------------- |
-| space, enter | show the answer, or the question again                                  |
-| 1 2 3 4      | Again, Hard, Good, Easy, labelled with the interval Anki would schedule |
-| u            | undo the last answer or change                                          |
-| s            | suspend the card                                                        |
-| b            | bury the card until tomorrow                                            |
-| f            | cycle the card's flag colour                                            |
-| m            | mark or unmark the note (Anki's `marked` tag)                           |
-| e            | edit the note in `$EDITOR` (see below), then show the card again        |
-| r            | re-transmit and redraw the card's images                                |
-| esc          | back to the deck list, with refreshed counts                            |
-| q            | quit; the session summary is printed afterwards                         |
-| ?            | list the keys; every screen has this                                    |
-
-Scheduling is done by Anki's own backend, so intervals, learning steps, daily limits, and sibling burying match the desktop, and the review log syncs like any other. Cards are rendered as text with the notetype's formatting where a terminal can show it: alignment, bold, italic, underline, small text, colours, lists, cloze deletions. Audio appears as a label. Text wraps at 120 columns and sits centered, so a wide terminal gets margins rather than long lines.
-
-Images are drawn inline. yaac asks the terminal which graphics protocol it supports (Kitty, Sixel, or iTerm2) and falls back to half-block characters everywhere else, including Terminal.app and Alacritty. Kitty graphics work inside tmux when `allow-passthrough on` is set. tmux needs care there: it forwards placeholder cells without the marks that tell the terminal which part of the image a cell shows, so yaac sends those cells to the outer terminal directly whenever an image appears or moves (and on the two frames after, in case tmux dropped one), and it drops pane output that arrives faster than it can forward, so images are sent as PNG in paced bursts. `r` re-sends the current card's images if one still got lost. SVG files are rasterised with system fonts. Cards of Anki's built-in Image Occlusion notetype get their masks painted in: hidden shapes are covered on the question side and outlined on the answer side, with "hide all, guess one" respected. Set `images` in the config to `kitty`, `sixel`, `iterm2`, or `halfblocks` to skip the probe, or `off` for labels only.
-
-LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, plain sub- and superscripts, stays in the text: `\(\alpha^2\)` becomes `α²`. Fractions, roots, matrices, and every display formula are typeset in-process (a KaTeX port with its fonts built in, so nothing needs to be installed) and drawn like an image, which takes one of the graphics protocols above; with half-blocks or images off, the Unicode approximation stands in, `\frac{a}{b}` and the like left as written. Both MathJax's `\(`, `\)`, `\[`, `\]` and the older `[latex]`, `[$]`, `[$$]` markup are recognised. For the older kind the media folder is checked first: the desktop caches its own TeX renders there under a name derived from the formula, and those cover things the typesetter does not, so they are shown as they are on the desktop, recoloured to the terminal. The ink is black or white depending on the terminal's background, which the graphics probe asks for, and grey when the terminal does not answer; `latex_colour` in the config overrides it, and `yaac info` shows what was chosen. Wherever a field is shown as plain text, the browse list, `yaac search`, and `yaac show`, formulas appear as that Unicode approximation.
-
-### Browse and edit
-
-`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Each row shows the sort field on the left and the deck on the right, with a `⚑` in the flag's colour when a card of the note is flagged and a `★` when the note is marked sitting just before the deck name; a note whose cards are all suspended is dimmed. The line above the fields repeats these states next to the notetype and deck. Images and formulas in fields are drawn the same way as in review.
-
-`t` and `T` ask for tags on the bottom line, several separated by spaces. Tab replaces the word at the cursor with the next tag that starts with it, drawn from the whole collection when adding and from the note's own tags when removing, so a bare tab after `T` steps through what the note has. Enter applies, esc cancels. A note changed by any of these keys stays in the list until the search runs again, which enter does; a triage query like `tag:todo` therefore only lets go of a note once you say so, and the selection moves to the next one.
-
-| Key                          | Action                                                         |
-| ---------------------------- | -------------------------------------------------------------- |
-| /                            | focus the search box; enter or esc leaves it, ctrl-u clears it |
-| j/k, arrows, g/G             | move through the results; arrows also work while typing        |
-| ctrl-d, ctrl-u, page down/up | scroll the note                                                |
-| e                            | edit the note in `$VISUAL` or `$EDITOR`                        |
-| d                            | delete the note and its cards                                  |
-| s                            | suspend every card of the note, or unsuspend them when all are |
-| f                            | cycle the flag colour on every card of the note                |
-| m                            | mark or unmark the note (Anki's `marked` tag)                  |
-| t, T                         | add or remove tags, typed on the bottom line; tab completes    |
-| enter                        | run the search again, dropping notes that no longer match      |
-| u                            | undo the last change                                           |
-| r                            | re-transmit and redraw images                                  |
-| esc                          | back to the deck list when opened from it, otherwise quit      |
-| q                            | quit                                                           |
-| ?                            | list the keys                                                  |
-
-Editing, from here, from the review screen with `e`, or with `yaac edit NOTE_ID --editor`, writes the note to a temporary markdown file and opens the editor on it:
-
-```
-<!-- yaac: note 1693526400000 (Basic). Save and quit to apply, empty the file to abort. -->
-tags: vocab animals
-
-# Front
-
-el gato
-
-# Back
-
-cat
-```
-
-Fields are HTML as Anki stores them, with `<br>` shown as a line break and turned back into `<br>` on save. Everything else (images, styling, cloze markers) stays untouched. A field whose text you did not change is written back exactly as it was, a field whose heading you delete keeps its value, and `tags:` takes space-separated tags. Emptying the file aborts. A file that does not parse, because of an unknown heading say, is reopened with the error at the top. The change goes through Anki's own update path, so cards are regenerated and `u` undoes it. `$VISUAL` is tried before `$EDITOR`, either may include arguments (`code --wait`), and `vi` is the fallback.
-
-Adding a note with `a` in the deck picker opens the same file with empty fields; quitting the editor without typing anything aborts. On save, Anki's checks run as they do for `yaac add`: an empty first field or cloze markers that do not fit the notetype reopen the file with the problem at the top, and so does a duplicate first field, once; saving a duplicate again unchanged adds it anyway.
-
-### Stats
-
-`yaac stats` prints what the desktop's stats screen shows, in the same order: today's answers, cards due over the next month, a calendar heatmap of the last year with the current and longest streak, review counts and time, card counts, median interval and ease (difficulty, stability, and retrievability instead when FSRS is on), retention, the hourly breakdown, answer buttons, and cards added. Graphs become sparklines, and the tables put the desktop's default periods side by side, the last 31 days and the last 12 months. A query limits the numbers to matching cards, `yaac stats deck:Spanish`, and `--all` loads the whole history, which adds an all-time column, one calendar per year, and the all-time retention row. The counting is done by Anki's own statistics code, so the numbers agree with the desktop.
+Images, they work if your terminal supports it. There's a few different modes and oh boy is this complicated. See config below for how to control this.
 
 ### Sync
 
-`login` exchanges your AnkiWeb credentials for a session key and stores only the key, in `~/.local/share/yaac/auth.toml` (or `$XDG_DATA_HOME/yaac/auth.toml`, or `$YAAC_AUTH`), readable by you alone. When stdin is not a terminal the password is read from it, so scripts never put it on a command line. `--endpoint URL` or `sync_endpoint` in the config points at a self-hosted sync server.
+`login` gets a session key from AnkiWeb and stores that in `~/.local/share/yaac/auth.toml` (or `$XDG_DATA_HOME/yaac/auth.toml` or `$YAAC_AUTH`).
 
-`sync` runs a normal sync, then a media sync. When the collections have diverged (first sync of a new profile, or after a schema change) Anki requires a full sync in one direction. yaac asks which side wins on a terminal and refuses when piped unless `--full-upload` or `--full-download` is given, together with `--yes`. A forced backup is taken before a full download.
-
-With `auto_sync = true` in the config, every command that changed something syncs before it exits. A failed auto sync is a warning, not an error; the change stays local and the next sync picks it up.
-
-Exit codes: 0 ok, 1 error, 2 usage, 3 collection locked.
-
-### JSON
-
-Notes are objects with `id`, `guid`, `notetype`, `deck`, `tags`, `modified`, `sort_field`, `fields` (a name-to-HTML map in notetype order), and `cards` (each with `id`, `template`, `deck`, `queue`, `due_in_days`, `interval_days`, `reps`, `lapses`, `flag`). `search` and `add` print an array of them; `show` and `edit` too.
-
-`stats --json` prints the numbers behind every section, the calendar as a map from date to review count.
-
-`add --from-json` reads the same shape it prints, reduced to what matters:
-
-```json
-[
-  {
-    "fields": { "Front": "el gato/la gata", "Back": "cat" },
-    "tags": ["vocab"]
-  },
-  {
-    "notetype": "Cloze",
-    "deck": "Spanish",
-    "fields": { "Text": "{{c1::el gato}} means cat" }
-  }
-]
-```
-
-Missing `notetype`, `deck`, or `tags` fall back to the flags, then to the config.
+`sync` runs a normal sync, then a media sync. If a full sync is required, yaac asks which side wins and you'll have to pass `--full-upload` or `--full-download`.
 
 ### Config
 
-`$XDG_CONFIG_HOME/yaac/config.toml` (or `~/.config/yaac/config.toml`, or the file named by `YAAC_CONFIG`):
+`$XDG_CONFIG_HOME/yaac/config.toml` / `~/.config/yaac/config.toml` / `$YAAC_CONFIG`:
 
 ```toml
+# does not have to be specified, but can point to a different collection if you want to
 collection = "/Users/me/Library/Application Support/Anki2/User 1/collection.anki2"
 default_notetype = "Basic"
 default_deck = "Inbox"
 auto_sync = false
-sync_endpoint = "https://sync.example.org/"   # only for self-hosted servers
-images = "auto"                                # kitty, sixel, iterm2, halfblocks, or off
-latex_colour = "#ffffff"                       # ink for formulas; default follows the background
+# for self-hosted servers
+sync_endpoint = "https://sync.example.org/"
+# auto, kitty, sixel, iterm2, halfblocks, or off
+images = "auto"
+# ink for formulas, default follows the background
+latex_colour = "#ffffff"
 ```
 
 All keys are optional.
 
 ## Development
 
-```
+```sh
 cargo build --release
 cargo test
 ```
 
 Notes:
-
-- `anki` (rslib) is a git dependency pinned to the tag of the installed Anki desktop version. Bump the tag when upgrading Anki and expect API changes. The flake fetches the Anki tree once more for the package build, because Anki's build scripts read `proto/`, `ftl/`, and `.version` from the workspace root and the vendored crates come without it; its tag and hash in `flake.nix` must follow. `nix build` checks the package.
-- `tokio` is a direct dependency only to enable its `io-util` feature; rslib relies on feature unification from Anki's workspace and does not compile without it.
-- rslib has no TLS backend unless a feature asks for one, and without it every HTTPS request fails with a bare network error. yaac enables its `rustls` feature, which needs no system libraries.
-- The first build clones the Anki repository and compiles rslib, which takes a few minutes.
-- Tests never touch a real profile: they create throwaway collections through rslib and drive the built binary.
-- To see how a card comes out of the HTML and CSS converter without opening the TUI, `cargo run --example render_card -- PATH/collection.anki2 CARD_ID` prints both sides line by line with alignment and styles. Card ids are in `yaac show NOTE_ID --json`.
+- `anki` (rslib) is a git dependency that should be pinned to the tag of whatever version of Anki you have installed. Bump this when upgrading Anki and expect API changes. The flake fetches the Anki tree once more for the package build, because Anki's build scripts read `proto/`, `ftl/`, and `.version` from the workspace root and the vendored crates come without it. It's tag and hash in `flake.nix` must follow. `nix build` checks the package.
+- `tokio` is a direct dependency only to enable its `io-util` feature, rslib relies on feature unification from Anki's workspace and does not compile without it.
+- Tests never touch a real profile, they create throwaway collections through rslib and drive the built binary.
+- To see how a card comes out of the HTML and CSS converter without opening the TUI, use `cargo run --example render_card -- [PATH/collection.anki2] [card-id]`, it prints both sides line by line. Card ids are in `yaac show [note-id] --json`.
 
 ## License
 
