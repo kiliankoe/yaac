@@ -1,5 +1,5 @@
-//! The browse screen: a search box on top, matching notes on one side, the selected
-//! note's fields, tags, and cards on the other. `e` opens the note in `$EDITOR`, `d`
+//! The browse screen: a search box on top, matching notes below it, the selected
+//! note's fields, tags, and cards under those. `e` opens the note in `$EDITOR`, `d`
 //! deletes it after asking.
 
 use std::time::Duration;
@@ -22,9 +22,6 @@ use crate::render::{Block, Stylesheet, html_to_blocks};
 use crate::session::{AnkiResultExt, Session, anki_error};
 use crate::tui::images::Images;
 use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
-
-/// Side-by-side panes need this much width; narrower terminals stack them.
-const SIDE_BY_SIDE_MIN_WIDTH: u16 = 100;
 
 const KEYS: &[(&str, &str)] = &[
     ("/", "type a search; enter or esc leaves the box"),
@@ -274,20 +271,13 @@ impl Browser {
         .areas(frame.area());
         self.draw_query(frame, top);
 
-        let side_by_side = body.width >= SIDE_BY_SIDE_MIN_WIDTH;
-        let split = [Constraint::Percentage(40), Constraint::Percentage(60)];
-        let [list_area, detail_area] = if side_by_side {
-            Layout::horizontal(split).areas(body)
-        } else {
-            Layout::vertical(split).areas(body)
-        };
+        // The list above the note rather than beside it: full width reads better
+        // than two narrow columns, and a note is mostly what you look at.
+        let [list_area, detail_area] =
+            Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
         self.draw_list(frame, list_area);
         let panel = Panel::new()
-            .borders(if side_by_side {
-                Borders::LEFT
-            } else {
-                Borders::TOP
-            })
+            .borders(Borders::TOP)
             .border_style(Style::new().dim());
         let inner = panel.inner(detail_area);
         frame.render_widget(panel, detail_area);

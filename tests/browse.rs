@@ -162,7 +162,7 @@ fn a_query_on_the_command_line_lists_notes_by_sort_field_and_keys_drive_the_list
 }
 
 #[test]
-fn the_screen_shows_the_list_beside_the_selected_notes_fields_and_cards() {
+fn the_screen_shows_the_list_above_the_selected_notes_fields_and_cards() {
     let dir = tempfile::tempdir().unwrap();
     let path = fresh_collection(dir.path());
     yaac_on(&path)
@@ -177,7 +177,7 @@ fn the_screen_shows_the_list_beside_the_selected_notes_fields_and_cards() {
     browse::search(&mut session, &mut browser).unwrap();
     let media = dir.path().join("collection.media");
 
-    let lines = screen(&mut browser, 100, 24, &media);
+    let lines = screen(&mut browser, 100, 30, &media);
     assert!(lines[0].contains("deck:Default"), "{}", lines[0]);
     assert!(lines[0].contains("2 notes"), "{}", lines[0]);
     let list_row = lines
@@ -189,38 +189,26 @@ fn the_screen_shows_the_list_beside_the_selected_notes_fields_and_cards() {
         "{}",
         lines[list_row + 1]
     );
-    // Side by side: the detail pane starts to the right of the list on the same rows.
     let detail = |needle: &str| {
         lines
             .iter()
-            .position(|line| line[40..].contains(needle))
+            .position(|line| line.contains(needle))
             .unwrap_or_else(|| panic!("{needle:?} in the detail pane"))
     };
     let header = detail("Basic");
+    assert!(header > list_row + 1, "the note sits below the list");
     assert!(lines[header].contains("Default") && lines[header].contains("food"));
     let front = detail("Front");
-    assert!(lines[front + 1][40..].contains("apple"));
+    assert!(lines[front + 1].contains("apple"));
     let back = detail("Back");
-    assert!(lines[back + 1][40..].contains("a fruit"));
+    assert!(lines[back + 1].contains("a fruit"));
     assert!(
-        lines[back + 2][40..].contains("with seeds"),
+        lines[back + 2].contains("with seeds"),
         "<br> breaks the line"
     );
     let cards = detail("Cards");
     assert!(lines[cards + 1].contains("Card 1") && lines[cards + 1].contains("new"));
-    assert!(lines[22].contains("e edit"), "{}", lines[22]);
-
-    // Narrow terminals stack the panes.
-    let lines = screen(&mut browser, 80, 24, &media);
-    let list_row = lines
-        .iter()
-        .position(|line| line.starts_with("▶ apple"))
-        .unwrap();
-    let front = lines
-        .iter()
-        .position(|line| line.trim_start().starts_with("Front"))
-        .unwrap();
-    assert!(front > list_row, "detail below the list");
+    assert!(lines[28].contains("e edit"), "{}", lines[28]);
     session.close().unwrap();
 }
 
@@ -316,14 +304,14 @@ fn the_detail_pane_wraps_long_fields_at_a_readable_width() {
     browse::search(&mut session, &mut browser).unwrap();
     let media = dir.path().join("collection.media");
 
-    let lines = screen(&mut browser, 300, 24, &media);
+    let lines = screen(&mut browser, 300, 30, &media);
     let text_rows: Vec<&String> = lines.iter().filter(|line| line.contains("word")).collect();
     assert!(text_rows.len() >= 3, "wrapped: {text_rows:?}");
     for line in text_rows {
-        // The list takes 40% (120 columns), the pane border and inset 2 more.
+        // One column of inset, then at most 120 columns of text.
         assert!(
-            line.trim_end().len() <= 122 + 120,
-            "no wider than 120 columns after the list: {}",
+            line.trim_end().len() <= 121,
+            "no wider than 120 columns: {}",
             line.trim_end().len()
         );
     }
