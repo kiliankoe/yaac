@@ -99,9 +99,11 @@ Scheduling is done by Anki's own backend, so intervals, learning steps, daily li
 
 Images are drawn inline. yaac asks the terminal which graphics protocol it supports (Kitty, Sixel, or iTerm2) and falls back to half-block characters everywhere else, including Terminal.app and Alacritty. Kitty graphics work inside tmux when `allow-passthrough on` is set. tmux needs care there: it forwards placeholder cells without the marks that tell the terminal which part of the image a cell shows, so yaac sends those cells to the outer terminal directly whenever an image appears or moves (and on the two frames after, in case tmux dropped one), and it drops pane output that arrives faster than it can forward, so images are sent as PNG in paced bursts. `r` re-sends the current card's images if one still got lost. SVG files are rasterised with system fonts. Cards of Anki's built-in Image Occlusion notetype get their masks painted in: hidden shapes are covered on the question side and outlined on the answer side, with "hide all, guess one" respected. Set `images` in the config to `kitty`, `sixel`, `iterm2`, or `halfblocks` to skip the probe, or `off` for labels only.
 
+LaTeX is shown too. A formula that Unicode can carry, Greek letters, operators, plain sub- and superscripts, stays in the text: `\(\alpha^2\)` becomes `α²`. Fractions, roots, matrices, and every display formula are typeset in-process (a KaTeX port with its fonts built in, so nothing needs to be installed) and drawn like an image, which takes one of the graphics protocols above; with half-blocks or images off, the Unicode approximation stands in, `\frac{a}{b}` and the like left as written. Both MathJax's `\(`, `\)`, `\[`, `\]` and the older `[latex]`, `[$]`, `[$$]` markup are recognised. For the older kind the media folder is checked first: the desktop caches its own TeX renders there under a name derived from the formula, and those cover things the typesetter does not, so they are shown as they are on the desktop, recoloured to the terminal. The ink is black or white depending on the terminal's background, which the graphics probe asks for, and grey when the terminal does not answer; `latex_colour` in the config overrides it, and `yaac info` shows what was chosen. Wherever a field is shown as plain text, the browse list, `yaac search`, and `yaac show`, formulas appear as that Unicode approximation.
+
 ### Browse and edit
 
-`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images in fields are drawn the same way as in review.
+`yaac browse` shows a search box, the matching notes sorted by their sort field below it, and the selected note's fields, tags, and cards under those, wrapped at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images and formulas in fields are drawn the same way as in review.
 
 | Key                          | Action                                                         |
 | ---------------------------- | -------------------------------------------------------------- |
@@ -184,6 +186,7 @@ default_deck = "Inbox"
 auto_sync = false
 sync_endpoint = "https://sync.example.org/"   # only for self-hosted servers
 images = "auto"                                # kitty, sixel, iterm2, halfblocks, or off
+latex_colour = "#ffffff"                       # ink for formulas; default follows the background
 ```
 
 All keys are optional.

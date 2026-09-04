@@ -21,6 +21,9 @@ pub fn run(ctx: &Context, args: BrowseArgs) -> Result<()> {
         images::probe(ctx.config.images.as_deref()),
         session.media_dir(),
     );
+    if let Some(colour) = ctx.config.latex_colour()? {
+        images = images.with_math_colour(colour);
+    }
     let mut browser = Browser::new(args.query.join(" "));
     let mut terminal = tui::Terminal::open();
     // Back and quit both end the program here; only the picker tells them apart.

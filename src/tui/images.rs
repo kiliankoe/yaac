@@ -10,10 +10,12 @@ use std::sync::Arc;
 use image::DynamicImage;
 use ratatui::layout::{Rect, Size};
 use ratatui_image::Resize;
-use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::picker::cap_parser::QueryStdioOptions;
+use ratatui_image::picker::{Capability, Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
 
 use crate::render::image::load;
+use crate::render::latex::{self, Math};
 use crate::render::occlusion::{self, Mask};
 use crate::tui::kitty::{self, MAX_ID, Placement};
 
@@ -30,9 +32,14 @@ pub fn probe(setting: Option<&str>) -> Option<Picker> {
         return None;
     }
     // Querying the terminal also learns the cell size in pixels, which even a forced
-    // protocol needs for scaling; half-blocks are the fallback for terminals that do
-    // not answer.
-    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    // protocol needs for scaling, and the background colour, which decides the ink
+    // for formulas; half-blocks are the fallback for terminals that do not answer.
+    let options = QueryStdioOptions {
+        terminal_background_color_osc: true,
+        ..QueryStdioOptions::default()
+    };
+    let mut picker =
+        Picker::from_query_stdio_with_options(options).unwrap_or_else(|_| Picker::halfblocks());
     let forced = match setting.as_str() {
         "kitty" => Some(ProtocolType::Kitty),
         "sixel" => Some(ProtocolType::Sixel),
@@ -46,6 +53,26 @@ pub fn probe(setting: Option<&str>) -> Option<Picker> {
     Some(picker)
 }
 
+/// The terminal's background, when the probe learned it.
+pub fn background(picker: &Picker) -> Option<(u8, u8, u8)> {
+    picker.capabilities().iter().find_map(|cap| match cap {
+        Capability::Background(r, g, b) => Some((*r, *g, *b)),
+        _ => None,
+    })
+}
+
+/// Ink for formulas: black on a light background, white on a dark one, and a grey that
+/// reads on either when the terminal did not say.
+pub fn math_colour_for(background: Option<(u8, u8, u8)>) -> [u8; 3] {
+    match background {
+        Some((r, g, b)) => {
+            let luminance = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
+            if luminance > 128.0 { [0; 3] } else { [255; 3] }
+        }
+        None => [0x88; 3],
+    }
+}
+
 /// An image ready to draw at one cell size.
 pub enum Encoded {
     Native(Protocol),
@@ -55,6 +82,8 @@ pub enum Encoded {
 pub struct Images {
     picker: Option<Picker>,
     media_dir: PathBuf,
+    /// Ink for typeset formulas.
+    math_colour: [u8; 3],
     decoded: HashMap<String, Result<Arc<DynamicImage>, String>>,
     /// Encoded for a specific cell size; keyed by file and size because the encoding
     /// depends on both.
@@ -86,9 +115,11 @@ impl Images {
         sink: Box<dyn Write + Send>,
         tmux: bool,
     ) -> Self {
+        let math_colour = math_colour_for(picker.as_ref().and_then(background));
         Self {
             picker,
             media_dir: media_dir.into(),
+            math_colour,
             decoded: HashMap::new(),
             encoded: HashMap::new(),
             next_kitty_id: 1,
@@ -105,6 +136,16 @@ impl Images {
     /// Labels only: no protocol, nothing decoded.
     pub fn disabled(media_dir: impl Into<PathBuf>) -> Self {
         Self::new(None, media_dir)
+    }
+
+    /// Overrides the ink for formulas, from the config.
+    pub fn with_math_colour(mut self, colour: [u8; 3]) -> Self {
+        self.math_colour = colour;
+        self
+    }
+
+    pub fn math_colour(&self) -> [u8; 3] {
+        self.math_colour
     }
 
     pub fn enabled(&self) -> bool {
@@ -135,6 +176,38 @@ impl Images {
             self.decoded.insert(src.to_string(), result);
         }
         self.decoded[src].clone()
+    }
+
+    /// Makes the formula available under the key it returns, so that the image
+    /// methods find it; typeset once, like a file is decoded once.
+    pub fn math(&mut self, math: &Math) -> String {
+        let key = math.key();
+        if !self.decoded.contains_key(&key) {
+            let result = self.typeset(math).map(Arc::new);
+            self.decoded.insert(key.clone(), result);
+        }
+        key
+    }
+
+    /// The desktop's cached render when the media folder has one, since real TeX
+    /// covers more than the in-process typesetter, otherwise the latter.
+    fn typeset(&self, math: &Math) -> Result<DynamicImage, String> {
+        let Some(picker) = &self.picker else {
+            return Err("images are off".to_string());
+        };
+        // Half-block cells are far too coarse for a formula; the text stands in.
+        if picker.protocol_type() == ProtocolType::Halfblocks {
+            return Err("half-blocks cannot show a formula".to_string());
+        }
+        if let Some(stem) = &math.cached {
+            for ext in ["png", "svg"] {
+                if let Ok(image) = load(&self.media_dir, &format!("{stem}.{ext}")) {
+                    return Ok(latex::recolour(image, self.math_colour));
+                }
+            }
+        }
+        let em_px = f32::from(picker.font_size().height) * latex::EM_PER_CELL;
+        latex::render(math, self.math_colour, em_px)
     }
 
     /// Why an image cannot be shown, if it cannot.
@@ -310,6 +383,65 @@ mod tests {
         let mut picker = Picker::halfblocks();
         picker.set_protocol_type(ProtocolType::Kitty);
         Images::with_sink(Some(picker), dir, Box::new(sink), false)
+    }
+
+    fn math(latex: &str, cached: Option<&str>) -> Math {
+        Math {
+            latex: latex.to_string(),
+            display: true,
+            cached: cached.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn math_is_typeset_unless_the_desktop_left_a_render_in_the_media_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut images = kitty_images(dir.path(), Shared::default()).with_math_colour([1, 2, 3]);
+        let key = images.math(&math(r"\frac{a}{b}", None));
+        let size = images.size_for(&key, Size::new(80, 10)).unwrap();
+        assert!(size.height >= 2, "a fraction spans rows: {size:?}");
+        let typeset = images.decoded[&key].as_ref().unwrap().to_rgba8();
+        assert!(typeset.pixels().any(|p| p.0 == [1, 2, 3, 255]));
+
+        let mut png = image::RgbaImage::new(4, 4);
+        png.put_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
+        png.save(dir.path().join("latex-abc.png")).unwrap();
+        let key = images.math(&math("ignored", Some("latex-abc")));
+        let cached = images.decoded[&key].as_ref().unwrap().to_rgba8();
+        assert_eq!(cached.dimensions(), (4, 4), "the desktop's file is used");
+        assert_eq!(cached.get_pixel(1, 1).0, [1, 2, 3, 255], "in our colour");
+
+        assert_eq!(
+            images.math(&math("x", Some("latex-missing"))),
+            math("x", Some("latex-missing")).key()
+        );
+        assert!(
+            images.decoded[&key].is_ok(),
+            "a missing file falls back to typesetting"
+        );
+    }
+
+    #[test]
+    fn math_needs_a_graphics_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut images = Images::new(Some(Picker::halfblocks()), dir.path());
+        let key = images.math(&math("x", None));
+        assert_eq!(images.size_for(&key, Size::new(80, 10)), None);
+        assert!(images.problem(&key).is_some());
+        let mut off = Images::disabled(dir.path());
+        let key = off.math(&math("x", None));
+        assert_eq!(off.size_for(&key, Size::new(80, 10)), None);
+    }
+
+    #[test]
+    fn math_colour_follows_the_terminal_background() {
+        assert_eq!(math_colour_for(None), [0x88; 3], "unknown background");
+        assert_eq!(
+            math_colour_for(Some((250, 250, 250))),
+            [0; 3],
+            "dark ink on a light background"
+        );
+        assert_eq!(math_colour_for(Some((20, 20, 30))), [255; 3]);
     }
 
     #[test]

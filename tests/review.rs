@@ -427,3 +427,48 @@ fn space_and_enter_toggle_between_question_and_answer() {
     review::handle(&mut reviewer, KeyEvent::from(KeyCode::Enter)).unwrap();
     assert!(!revealed(&reviewer));
 }
+
+#[test]
+fn formulas_stay_text_when_simple_and_are_typeset_otherwise() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    add_basic(
+        &path,
+        r"Area \(\alpha^2\) and [$$]\frac{a}{b}[/$$]",
+        "answer",
+    );
+    let media = dir.path().join("collection.media");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+
+    let mut labels = Images::disabled(&media);
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut labels, None))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    assert!(
+        screen.iter().any(|line| line.contains("Area α² and")),
+        "{screen:?}"
+    );
+    assert!(
+        screen.iter().any(|line| line.contains(r"\frac{a}{b}")),
+        "the fraction stands in as text"
+    );
+
+    let mut picker = ratatui_image::picker::Picker::halfblocks();
+    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
+    let mut kitty = Images::with_sink(Some(picker), &media, Box::new(std::io::sink()), false);
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut kitty, None))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    assert!(
+        !screen.iter().any(|line| line.contains(r"\frac")),
+        "typeset instead of text"
+    );
+    assert!(
+        screen.iter().any(|line| line.contains('\u{10EEEE}')),
+        "placeholder cells carry the image"
+    );
+}

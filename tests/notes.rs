@@ -515,3 +515,33 @@ fn a_bare_yaac_is_review() {
         .code(1)
         .stderr(predicate::str::contains("collection not found"));
 }
+
+#[test]
+fn lists_and_show_print_formulas_as_unicode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let id = add_basic(&path, r"Roman \(\mathrm{V}\) is [$]x^2[/$]", "five");
+    yaac_on(&path)
+        .args(["search", "deck:*"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Roman V is x²"));
+    yaac_on(&path)
+        .args(["show", &id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Front     Roman V is x²"));
+    let output = yaac_on(&path)
+        .args(["show", &id.to_string(), "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown = json(&output);
+    assert_eq!(shown[0]["sort_field"], "Roman V is x²");
+    assert_eq!(
+        shown[0]["fields"]["Front"], r"Roman \(\mathrm{V}\) is [$]x^2[/$]",
+        "the JSON fields stay as stored"
+    );
+}

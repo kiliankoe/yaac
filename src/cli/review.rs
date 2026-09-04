@@ -67,6 +67,9 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
         images::probe(ctx.config.images.as_deref()),
         session.media_dir(),
     );
+    if let Some(colour) = ctx.config.latex_colour()? {
+        images = images.with_math_colour(colour);
+    }
 
     let mut terminal = tui::Terminal::open();
     loop {

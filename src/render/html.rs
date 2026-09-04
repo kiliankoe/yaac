@@ -11,6 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::render::css::{Decl, ElementRef, Stylesheet};
+use crate::render::latex::{self, Math};
 use crate::render::occlusion::Mask;
 
 /// Joins rslib's rendered nodes into HTML. Filters rslib leaves to the frontend get
@@ -40,7 +41,8 @@ pub fn nodes_to_html(nodes: &[RenderedNode], answer_side: bool) -> String {
 }
 
 /// A card is text interrupted by images; each image is a block of its own so the
-/// screen can place a picture where the `<img>` sat.
+/// screen can place a picture where the `<img>` sat. Formulas that Unicode cannot
+/// show are drawn as images too.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Text(Vec<Line<'static>>),
@@ -50,27 +52,33 @@ pub enum Block {
         /// Image occlusion shapes to paint over it, if the card has any.
         masks: Vec<Mask>,
     },
+    Math {
+        math: Math,
+        align: Option<Alignment>,
+    },
 }
 
-/// Text-only view of the card: images become `[image: name]` labels on their own line.
+/// Text-only view of the card: images become `[image: name]` labels on their own line
+/// and formulas their Unicode approximation.
 pub fn html_to_lines(html: &str, sheet: &Stylesheet<'_>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for block in html_to_blocks(html, sheet) {
         match block {
             Block::Text(text) => lines.extend(text),
-            Block::Image { src, align, .. } => {
-                let mut line = Line::from(Span::styled(
-                    image_label(&src),
-                    Style::new().fg(Color::Cyan),
-                ));
-                if let Some(align) = align {
-                    line = line.alignment(align);
-                }
-                lines.push(line);
-            }
+            Block::Image { src, align, .. } => lines.push(stand_in(image_label(&src), align)),
+            Block::Math { math, align } => lines.push(stand_in(math.text(), align)),
         }
     }
     lines
+}
+
+/// A line standing in for something the screen cannot show, in the colour of labels.
+pub fn stand_in(text: String, align: Option<Alignment>) -> Line<'static> {
+    let mut line = Line::from(Span::styled(text, Style::new().fg(Color::Cyan)));
+    if let Some(align) = align {
+        line = line.alignment(align);
+    }
+    line
 }
 
 pub fn image_label(src: &str) -> String {
@@ -82,8 +90,8 @@ pub fn image_label(src: &str) -> String {
 }
 
 /// Renders HTML to text blocks with inline styling and per-line alignment, split by
-/// images. Whitespace collapses like a browser's, block elements end lines without
-/// adding blank ones, and `<br>` runs never produce more than one blank line.
+/// images and formulas. Whitespace collapses like a browser's, block elements end lines
+/// without adding blank ones, and `<br>` runs never produce more than one blank line.
 pub fn html_to_blocks(html: &str, sheet: &Stylesheet<'_>) -> Vec<Block> {
     let mut out = Builder::new(sheet);
     let mut rest = html;
@@ -103,12 +111,15 @@ pub fn html_to_blocks(html: &str, sheet: &Stylesheet<'_>) -> Vec<Block> {
             let (text, consumed) = decode_entity(after);
             out.text(&text);
             rest = &after[consumed..];
+        } else if let Some((math, len)) = latex::parse_at(rest) {
+            out.math(math);
+            rest = &rest[len..];
         } else if let Some(after) = rest.strip_prefix("[sound:") {
             let end = after.find(']').unwrap_or(after.len());
             out.label(&format!("[audio: {}]", &after[..end]));
             rest = after.get(end + 1..).unwrap_or("");
         } else {
-            let end = rest.find(['<', '&', '[']).unwrap_or(rest.len());
+            let end = rest.find(['<', '&', '[', '\\']).unwrap_or(rest.len());
             let end = if end == 0 { 1 } else { end };
             out.text(&rest[..end]);
             rest = &rest[end..];
@@ -479,6 +490,24 @@ impl<'s, 'c> Builder<'s, 'c> {
         });
     }
 
+    /// Inline formulas that Unicode can show stay in the text; the rest are drawn as
+    /// images and so, like images, become blocks of their own.
+    fn math(&mut self, math: Math) {
+        if self.hidden() {
+            return;
+        }
+        if !math.display && math.fits_text() {
+            self.text(&math.text());
+            return;
+        }
+        self.block_break();
+        self.flush_text();
+        self.blocks.push(Block::Math {
+            math,
+            align: self.alignment(),
+        });
+    }
+
     fn flush_text(&mut self) {
         while self.lines.last().is_some_and(|l| l.width() == 0) {
             self.lines.pop();
@@ -797,6 +826,50 @@ mod tests {
                 .all(|line| !line.to_string().contains("cloze")),
             "the hidden block stays hidden as text"
         );
+    }
+
+    #[test]
+    fn simple_inline_math_stays_in_the_text() {
+        assert_eq!(
+            plain(r"Value \(\alpha^2\) here, [$]x_1[/$] too."),
+            ["Value α² here, x₁ too."]
+        );
+        assert_eq!(
+            plain(r"C:\path and [x] stay"),
+            [r"C:\path and [x] stay"],
+            "a lone backslash or bracket is text"
+        );
+        assert_eq!(
+            plain(r#"<span style="display: none">\(x\)</span>shown"#),
+            ["shown"]
+        );
+    }
+
+    #[test]
+    fn display_and_complex_math_become_blocks() {
+        let blocks = html_to_blocks(
+            r"Area: [$]\frac{d^2}{4}[/$] then \[ \sum_{i=1}^{n} i \]",
+            &Stylesheet::default(),
+        );
+        assert_eq!(blocks.len(), 4, "{blocks:?}");
+        assert!(matches!(&blocks[0], Block::Text(lines) if lines[0].to_string() == "Area:"));
+        let Block::Math { math, align: None } = &blocks[1] else {
+            panic!("{:?}", blocks[1]);
+        };
+        assert_eq!(math.latex, r"\frac{d^2}{4}");
+        assert!(!math.display);
+        assert!(math.cached.is_some());
+        assert!(matches!(&blocks[2], Block::Text(lines) if lines[0].to_string() == "then"));
+        let Block::Math { math, .. } = &blocks[3] else {
+            panic!("{:?}", blocks[3]);
+        };
+        assert!(math.display);
+        assert_eq!(math.cached, None);
+
+        // The text-only view shows the approximation, marked like other stand-ins.
+        let lines = html_to_lines(r"\[ \sum_{i=1}^{n} i \]", &Stylesheet::default());
+        assert_eq!(lines[0].to_string(), "∑ᵢ₌₁ⁿ i");
+        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Cyan));
     }
 
     #[test]

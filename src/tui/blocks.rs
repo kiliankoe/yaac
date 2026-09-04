@@ -3,13 +3,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect, Size};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui_image::Image;
 
 use crate::render::Block;
-use crate::render::html::image_label;
+use crate::render::html::{image_label, stand_in};
 use crate::render::occlusion::Mask;
 use crate::tui::images::{Encoded, Images};
 
@@ -158,12 +157,12 @@ fn place(blocks: Vec<Block>, area: Rect, images: &mut Images, align: Alignment) 
         .iter()
         .map(|block| match block {
             Block::Text(lines) => text_height(lines),
-            Block::Image { .. } => 0,
+            Block::Image { .. } | Block::Math { .. } => 0,
         })
         .sum();
     let image_count = blocks
         .iter()
-        .filter(|block| matches!(block, Block::Image { .. }))
+        .filter(|block| matches!(block, Block::Image { .. } | Block::Math { .. }))
         .count()
         .max(1) as u16;
     let per_image = (area.height.saturating_sub(text_rows) / image_count)
@@ -195,13 +194,22 @@ fn place(blocks: Vec<Block>, area: Rect, images: &mut Images, align: Alignment) 
                         if let Some(problem) = images.problem(&src) {
                             label = format!("{label} ({problem})");
                         }
-                        let mut line =
-                            Line::from(Span::styled(label, Style::new().fg(Color::Cyan)));
-                        if let Some(align) = align {
-                            line = line.alignment(align);
-                        }
-                        push_text(&mut placed, vec![line]);
+                        push_text(&mut placed, vec![stand_in(label, align)]);
                     }
+                }
+            }
+            // A formula that cannot be drawn is readable as text, so no reason is added.
+            Block::Math { math, align } => {
+                let key = images.math(&math);
+                let available = Size::new(area.width, per_image);
+                match images.size_for(&key, available) {
+                    Some(size) => placed.push(Placed::Image {
+                        src: key,
+                        size,
+                        align,
+                        masks: Vec::new(),
+                    }),
+                    None => push_text(&mut placed, vec![stand_in(math.text(), align)]),
                 }
             }
         }

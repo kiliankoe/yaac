@@ -29,6 +29,14 @@ rpassword = "7.5"
 toml = "1.1"
 # io-util is what rslib needs but does not request itself; rt-multi-thread runs sync.
 tokio = { version = "1.53", features = ["io-util", "rt-multi-thread"] }
+# LaTeX math typeset in-process, a KaTeX port with its fonts embedded; pinned exactly
+# because the crate is young and its 0.1.x releases change the API.
+ratex-render = { version = "=0.1.14", features = ["embed-fonts"] }
+ratex-layout = "=0.1.14"
+ratex-parser = "=0.1.14"
+ratex-types = "=0.1.14"
+# LaTeX to Unicode text, for formulas simple enough to stay in the text.
+unicodeit = "0.2.1"
 
 [dev-dependencies]
 assert_cmd = "2.2"

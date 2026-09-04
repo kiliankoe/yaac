@@ -16,6 +16,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::render::latex;
 use crate::session::AnkiResultExt;
 
 #[derive(Serialize)]
@@ -137,7 +138,7 @@ fn view(col: &mut Collection, nid: NoteId, days_elapsed: u32) -> Result<NoteView
     let sort_field = note
         .fields()
         .get(notetype.config.sort_field_idx as usize)
-        .map(|value| html_to_text_line(value, true).into_owned())
+        .map(|value| latex::formulas_to_text(&html_to_text_line(value, true)))
         .unwrap_or_default();
     let fields = Fields(
         notetype
@@ -356,9 +357,7 @@ pub fn split_tags(raw: &[String]) -> Vec<String> {
 }
 
 pub fn plain_text(html: &str) -> String {
-    strip_html_preserving_media_filenames(html)
-        .trim()
-        .to_string()
+    latex::formulas_to_text(strip_html_preserving_media_filenames(html).trim())
 }
 
 /// One line per note, for `search` and `add`.

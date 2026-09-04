@@ -31,6 +31,14 @@ struct ImageSupport {
     protocol: String,
     cell_px: [u16; 2],
     tmux: bool,
+    /// The terminal's background as `#rrggbb`, when it answered.
+    background: Option<String>,
+    /// Ink formulas are typeset in.
+    latex_colour: String,
+}
+
+fn hex(colour: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", colour[0], colour[1], colour[2])
 }
 
 /// Cards due today across all decks, after daily limits.
@@ -47,10 +55,21 @@ pub fn run(ctx: &Context) -> Result<()> {
     session.close()?;
     // The probe talks to the terminal, so only when there is one to talk to.
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        info.images = images::probe(ctx.config.images.as_deref()).map(|picker| ImageSupport {
-            protocol: format!("{:?}", picker.protocol_type()).to_lowercase(),
-            cell_px: [picker.font_size().width, picker.font_size().height],
-            tmux: images::in_tmux(),
+        info.images = images::probe(ctx.config.images.as_deref()).map(|picker| {
+            let background = images::background(&picker);
+            let latex_colour = ctx
+                .config
+                .latex_colour()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| images::math_colour_for(background));
+            ImageSupport {
+                protocol: format!("{:?}", picker.protocol_type()).to_lowercase(),
+                cell_px: [picker.font_size().width, picker.font_size().height],
+                tmux: images::in_tmux(),
+                background: background.map(|(r, g, b)| hex([r, g, b])),
+                latex_colour: hex(latex_colour),
+            }
         });
     }
     output::emit(&info, ctx.json)
@@ -112,6 +131,12 @@ impl fmt::Display for Info {
                 images.cell_px[0],
                 images.cell_px[1],
                 if images.tmux { ", inside tmux" } else { "" }
+            )?;
+            writeln!(
+                f,
+                "LaTeX       ink {} (background {})",
+                images.latex_colour,
+                images.background.as_deref().unwrap_or("unknown")
             )?;
         }
         Ok(())

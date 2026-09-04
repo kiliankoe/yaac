@@ -13,7 +13,7 @@ use anki::card::CardId;
 use anyhow::{Context, Result};
 use yaac::config::Config;
 use yaac::render::html::nodes_to_html;
-use yaac::render::{Block, Stylesheet, html_to_blocks, image, occlusion};
+use yaac::render::{Block, Stylesheet, html_to_blocks, image, latex, occlusion};
 use yaac::session::Session;
 
 fn main() -> Result<()> {
@@ -92,6 +92,30 @@ fn main() -> Result<()> {
                     println!(
                         "{:<13} [image {src}: {outcome}, {} ms]",
                         format!("{align:?}"),
+                        started.elapsed().as_millis()
+                    );
+                }
+                Block::Math { math, align } => {
+                    let started = std::time::Instant::now();
+                    // Typeset the way a 20 px cell would, and keep the result to look at.
+                    let outcome = match latex::render(&math, [0x88; 3], 20.0 * latex::EM_PER_CELL) {
+                        Ok(bitmap) => {
+                            let out = std::env::temp_dir().join(format!("yaac-{side}-math.png"));
+                            bitmap.save(&out)?;
+                            format!(
+                                "{}x{} px into {}",
+                                bitmap.width(),
+                                bitmap.height(),
+                                out.display()
+                            )
+                        }
+                        Err(err) => format!("failed: {err}"),
+                    };
+                    println!(
+                        "{:<13} [math {:?}: text {:?}, {outcome}, {} ms]",
+                        format!("{align:?}"),
+                        math.latex,
+                        math.text(),
                         started.elapsed().as_millis()
                     );
                 }
