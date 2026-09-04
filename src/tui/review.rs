@@ -231,8 +231,7 @@ fn draw_actions(frame: &mut Frame, area: Rect, reviewer: &Reviewer, status: Opti
         ]),
     };
     let mut secondary = vec![
-        Span::raw(" u undo   s suspend   b bury   f flag   e edit   r redraw   esc decks   q quit")
-            .dim(),
+        Span::raw(" u undo   s suspend   b bury   f flag   e edit   esc decks   q quit").dim(),
     ];
     if let Some(flag) = reviewer.current.as_ref().map(|c| c.flag).filter(|&f| f > 0) {
         secondary.push(Span::raw("   flag: ").dim());

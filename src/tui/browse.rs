@@ -228,10 +228,7 @@ impl Browser {
         let help_line = if self.typing {
             Line::from(" enter/esc done   ↑/↓ move   ctrl-u clear").dim()
         } else {
-            Line::from(
-                " / search   e edit   u undo   j/k move   ctrl-d/u scroll   r redraw   q quit",
-            )
-            .dim()
+            Line::from(" / search   e edit   u undo   j/k move   ctrl-d/u scroll   q quit").dim()
         };
         frame.render_widget(Paragraph::new(help_line), help);
         if let Some(message) = &self.status {
