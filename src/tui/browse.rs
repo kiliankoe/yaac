@@ -1,5 +1,6 @@
 //! The browse screen: a search box on top, matching notes on one side, the selected
-//! note's fields, tags, and cards on the other. `e` opens the note in `$EDITOR`.
+//! note's fields, tags, and cards on the other. `e` opens the note in `$EDITOR`, `d`
+//! deletes it after asking.
 
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use ratatui::widgets::{Block as Panel, Borders, List, ListItem, ListState, Parag
 use crate::editor::{self, Editor, Outcome};
 use crate::notes::{self, NoteView, truncate};
 use crate::render::{Block, Stylesheet, html_to_blocks};
-use crate::session::{Session, anki_error};
+use crate::session::{AnkiResultExt, Session, anki_error};
 use crate::tui::images::Images;
 use crate::tui::{Terminal, blocks, is_ctrl_c, next_key, overlay};
 
@@ -32,8 +33,10 @@ const KEYS: &[(&str, &str)] = &[
     ("g/G", "first and last note"),
     ("ctrl-d/u, page down/up", "scroll the note"),
     ("e", "edit the note in $EDITOR"),
-    ("u", "undo the last edit"),
+    ("d", "delete the note, after confirming"),
+    ("u", "undo the last edit or deletion"),
     ("r", "re-send and redraw the images"),
+    ("esc", "back to the decks when opened from there, else quit"),
     ("q", "quit"),
 ];
 
@@ -44,11 +47,23 @@ pub enum BrowseAction {
     /// Run the query.
     Search,
     Edit(NoteId),
+    /// The user confirmed the deletion.
+    Delete(NoteId),
     Undo,
     /// Re-send the images.
     Redraw,
     /// Something drawn over the images went away; send their placements again.
     Refresh,
+    /// Leave the screen for whatever opened it.
+    Back,
+    Quit,
+}
+
+/// How the screen was left: `Back` returns to the deck picker when browse was opened
+/// from there, and ends the program otherwise, like `Quit`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Exit {
+    Back,
     Quit,
 }
 
@@ -68,6 +83,8 @@ pub struct Browser {
     status: Option<String>,
     /// The `?` overlay is up.
     help: bool,
+    /// `d` was pressed on this note and the status line asks for a `y`.
+    confirming: Option<NoteId>,
 }
 
 impl Browser {
@@ -84,6 +101,7 @@ impl Browser {
             detail: (0, 0),
             status: None,
             help: false,
+            confirming: None,
         }
     }
 
@@ -128,6 +146,15 @@ impl Browser {
         self.scroll = 0;
     }
 
+    /// Selects the note at `index`, or the last one when there are fewer, as after a
+    /// deletion.
+    pub fn select_nearest(&mut self, index: usize) {
+        if let Some(last) = self.notes.len().checked_sub(1) {
+            self.list.select(Some(index.min(last)));
+            self.scroll = 0;
+        }
+    }
+
     /// Swaps in a fresh view of one note, after an edit.
     pub fn replace_note(&mut self, note: NoteView) {
         if let Some(existing) = self.notes.iter_mut().find(|n| n.id == note.id) {
@@ -143,6 +170,13 @@ impl Browser {
         if self.help {
             self.help = false;
             return BrowseAction::Refresh;
+        }
+        if let Some(nid) = self.confirming.take() {
+            self.status = None;
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+                return BrowseAction::Delete(nid);
+            }
+            return BrowseAction::Continue;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if self.typing {
@@ -172,6 +206,7 @@ impl Browser {
         }
         match key.code {
             KeyCode::Char('q') => return BrowseAction::Quit,
+            KeyCode::Esc => return BrowseAction::Back,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('/') => {
                 self.typing = true;
@@ -185,6 +220,17 @@ impl Browser {
             KeyCode::Char('r') => return BrowseAction::Redraw,
             KeyCode::Char('d') if ctrl => self.scroll_by(self.half_page()),
             KeyCode::Char('u') if ctrl => self.scroll_by(-self.half_page()),
+            KeyCode::Char('d') => {
+                if let Some(note) = self.selected() {
+                    let prompt = format!(
+                        "delete \"{}\" and its {} card(s)? y confirms, any other key cancels",
+                        truncate(&note.sort_field, 40),
+                        note.cards.len()
+                    );
+                    self.confirming = Some(NoteId(note.id));
+                    self.status = Some(prompt);
+                }
+            }
             KeyCode::PageDown => self.scroll_by(self.half_page()),
             KeyCode::PageUp => self.scroll_by(-self.half_page()),
             KeyCode::Char('u') => return BrowseAction::Undo,
@@ -250,12 +296,18 @@ impl Browser {
         let help_line = if self.typing {
             Line::from(" enter/esc done   ↑/↓ move   ctrl-u clear").dim()
         } else {
-            Line::from(" / search   e edit   u undo   j/k move   ctrl-d/u scroll   q quit   ? help")
+            Line::from(" / search   e edit   d delete   u undo   ctrl-d/u scroll   q quit   ? help")
                 .dim()
         };
         frame.render_widget(Paragraph::new(help_line), help);
         if let Some(message) = &self.status {
-            frame.render_widget(Paragraph::new(format!(" {message}")).italic(), status);
+            let message = Paragraph::new(format!(" {message}"));
+            let message = if self.confirming.is_some() {
+                message.bold().fg(Color::Yellow)
+            } else {
+                message.italic()
+            };
+            frame.render_widget(message, status);
         }
         if self.help {
             overlay::keys(frame, "Browse keys", KEYS);
@@ -394,6 +446,30 @@ fn detail_blocks(note: &NoteView) -> Vec<Block> {
     blocks
 }
 
+/// The search for every note in a deck and its subdecks, quoted when the name needs it.
+pub fn deck_query(deck: &str) -> String {
+    let special = |c: char| c.is_whitespace() || matches!(c, '"' | '(' | ')');
+    if deck.chars().any(special) || deck.starts_with('-') {
+        format!("\"deck:{}\"", deck.replace('"', "\\\""))
+    } else {
+        format!("deck:{deck}")
+    }
+}
+
+/// Deletes the note with its cards and lists the results again with the next note
+/// selected. Undoable with `u` while yaac runs; afterwards the deletion syncs.
+pub fn delete(session: &mut Session, browser: &mut Browser, nid: NoteId) -> Result<()> {
+    let index = browser.list.selected().unwrap_or(0);
+    let removed = session.col.remove_notes(&[nid]).ctx("deleting note")?;
+    search(session, browser)?;
+    browser.select_nearest(index);
+    browser.set_status(format!(
+        "deleted the note and its {} card(s); u undoes",
+        removed.output
+    ));
+    Ok(())
+}
+
 /// Runs the browser's query, which happens on every keystroke. An empty query lists
 /// nothing, because the box starts empty and loading the whole collection then would
 /// be wasted work. A search the collection rejects becomes a status message rather
@@ -419,14 +495,14 @@ pub fn search(session: &mut Session, browser: &mut Browser) -> Result<()> {
     Ok(())
 }
 
-/// Runs the screen until the user quits. Searching, editing, and undo happen here
-/// because they need the session, and editing needs the terminal too.
+/// Runs the screen until the user leaves. Searching, editing, deleting, and undo
+/// happen here because they need the session, and editing needs the terminal too.
 pub fn run(
     terminal: &mut Terminal,
     session: &mut Session,
     browser: &mut Browser,
     images: &mut Images,
-) -> Result<()> {
+) -> Result<Exit> {
     search(session, browser)?;
     loop {
         terminal.draw(|frame| browser.draw(frame, images))?;
@@ -456,6 +532,7 @@ pub fn run(
                     Err(err) => browser.set_status(format!("edit failed: {err:#}")),
                 }
             }
+            BrowseAction::Delete(nid) => delete(session, browser, nid)?,
             BrowseAction::Undo => match session.col.undo() {
                 Ok(_) => {
                     search(session, browser)?;
@@ -464,7 +541,8 @@ pub fn run(
                 Err(AnkiError::UndoEmpty) => browser.set_status("nothing to undo"),
                 Err(err) => browser.set_status(format!("undo failed: {:#}", anki_error(err))),
             },
-            BrowseAction::Quit => return Ok(()),
+            BrowseAction::Back => return Ok(Exit::Back),
+            BrowseAction::Quit => return Ok(Exit::Quit),
         }
     }
 }

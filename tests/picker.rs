@@ -315,3 +315,17 @@ fn adding_from_the_editor_checks_the_note_like_the_cli_does() {
     assert_ne!(again, nid);
     session.close().unwrap();
 }
+
+#[test]
+fn b_opens_browse_on_the_selected_deck() {
+    use yaac::tui::browse::deck_query;
+    let mut picker = Picker::new(rows(), Vec::new());
+    assert_eq!(
+        press(&mut picker, KeyCode::Char('b')),
+        PickerAction::Browse(DeckId(2))
+    );
+    assert_eq!(deck_query("Spanish"), "deck:Spanish");
+    assert_eq!(deck_query("Spanish::Verbs"), "deck:Spanish::Verbs");
+    assert_eq!(deck_query("Irregular verbs"), "\"deck:Irregular verbs\"");
+    assert_eq!(deck_query("Say \"hi\""), "\"deck:Say \\\"hi\\\"\"");
+}

@@ -24,6 +24,7 @@ const KEYS: &[(&str, &str)] = &[
     ("enter", "review the selected deck"),
     ("a", "add a note to the selected deck"),
     ("A", "add another note of the notetype used last"),
+    ("b", "browse the selected deck's notes"),
     ("s", "sync the collection and media"),
     ("/", "filter decks by name"),
     ("esc", "clear the filter"),
@@ -34,6 +35,8 @@ const KEYS: &[(&str, &str)] = &[
 
 pub enum Choice {
     Deck(DeckId),
+    /// Open the browse screen on the deck's notes.
+    Browse(DeckId),
     Quit,
 }
 
@@ -48,6 +51,7 @@ pub enum PickerAction {
         deck: DeckId,
         notetype: String,
     },
+    Browse(DeckId),
     Quit,
 }
 
@@ -175,6 +179,11 @@ impl Picker {
             },
             KeyCode::Char('q') => return PickerAction::Quit,
             KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('b') => {
+                if let Some(row) = self.selected() {
+                    return PickerAction::Browse(DeckId(row.id));
+                }
+            }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 let Some(deck) = self.selected().map(|row| DeckId(row.id)) else {
                     return PickerAction::Continue;
@@ -305,12 +314,13 @@ impl Picker {
                 Span::raw("   enter review   esc clear").dim(),
             ])
         } else if self.filter.is_empty() {
-            Line::from(" enter review   / search   s sync   a/A add   j/k move   q quit   ? help")
+            Line::from(" enter review   / search   s sync   a/A add   b browse   q quit   ? help")
                 .dim()
         } else {
             Line::from(vec![
                 Span::raw(format!(" filter: {}   ", self.filter)),
-                Span::raw("enter review   / edit   s sync   a/A add   q quit   ? help").dim(),
+                Span::raw("enter review   / edit   s sync   a/A add   b browse   q quit   ? help")
+                    .dim(),
             ])
         };
         frame.render_widget(Paragraph::new(help_line), help);
@@ -394,6 +404,7 @@ pub fn pick(terminal: &mut Terminal, session: &mut Session, picker: &mut Picker)
         match picker.handle(key) {
             PickerAction::Continue => {}
             PickerAction::Select(deck) => return Ok(Choice::Deck(deck)),
+            PickerAction::Browse(deck) => return Ok(Choice::Browse(deck)),
             PickerAction::Quit => return Ok(Choice::Quit),
             PickerAction::Sync => {
                 picker.set_status("syncing…");

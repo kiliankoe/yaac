@@ -23,6 +23,7 @@ pub fn run(ctx: &Context, args: BrowseArgs) -> Result<()> {
     );
     let mut browser = Browser::new(args.query.join(" "));
     let mut terminal = tui::Terminal::open();
+    // Back and quit both end the program here; only the picker tells them apart.
     tui::browse::run(&mut terminal, &mut session, &mut browser, &mut images)?;
     drop(terminal);
     session.close()

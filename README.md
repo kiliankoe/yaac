@@ -77,11 +77,11 @@ After any change yaac takes a backup into the profile's `backups/` folder, follo
 
 ### Review
 
-`yaac review` (or a bare `yaac`) opens a deck picker with today's counts, or goes straight into a deck named on the command line. In the picker, `/` filters decks by name, `s` runs a normal and media sync without leaving the screen (a full sync is left to `yaac sync`, where the direction is confirmed), `a` adds a note to the highlighted deck (a notetype chooser, then the editor, see below), `A` does the same with the notetype used last (or `default_notetype` from the config) and skips the chooser, enter starts reviewing, and `q` quits. The review screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
+`yaac review` (or a bare `yaac`) opens a deck picker with today's counts, or goes straight into a deck named on the command line. In the picker, `/` filters decks by name, `s` runs a normal and media sync without leaving the screen (a full sync is left to `yaac sync`, where the direction is confirmed), `a` adds a note to the highlighted deck (a notetype chooser, then the editor, see below), `A` does the same with the notetype used last (or `default_notetype` from the config) and skips the chooser, `b` opens browse on the highlighted deck's notes, enter starts reviewing, and `q` quits. The review screen shows the deck and remaining new, learning, and review counts at the top, the card centered, and the keys at the bottom:
 
 | Key          | Action                                                                  |
 | ------------ | ----------------------------------------------------------------------- |
-| space, enter | show the answer                                                         |
+| space, enter | show the answer, or the question again                                  |
 | 1 2 3 4      | Again, Hard, Good, Easy, labelled with the interval Anki would schedule |
 | u            | undo the last answer or change                                          |
 | s            | suspend the card                                                        |
@@ -102,16 +102,18 @@ Images are drawn inline. yaac asks the terminal which graphics protocol it suppo
 
 `yaac browse` shows a search box, the matching notes sorted by their sort field, and the selected note's fields, tags, and cards. The panes sit side by side on wide terminals and stack on narrow ones, and the note's text wraps at 120 columns. A query on the command line runs right away; without one the search box is focused. The search runs as you type. Enter or esc leaves the box so that j/k move through the results, the arrow keys move either way, and `/` returns to the box. An empty box lists nothing; `deck:*` lists every note. Images in fields are drawn the same way as in review.
 
-| Key                          | Action                                                              |
-| ---------------------------- | ------------------------------------------------------------------- |
-| /                            | focus the search box; enter or esc leaves it, ctrl-u clears it      |
-| j/k, arrows, g/G             | move through the results; arrows also work while typing             |
-| ctrl-d, ctrl-u, page down/up | scroll the note                                                     |
-| e                            | edit the note in `$VISUAL` or `$EDITOR`                             |
-| u                            | undo the last edit                                                  |
-| r                            | re-transmit and redraw images                                       |
-| q                            | quit                                                                |
-| ?                            | list the keys                                                       |
+| Key                          | Action                                                         |
+| ---------------------------- | -------------------------------------------------------------- |
+| /                            | focus the search box; enter or esc leaves it, ctrl-u clears it |
+| j/k, arrows, g/G             | move through the results; arrows also work while typing        |
+| ctrl-d, ctrl-u, page down/up | scroll the note                                                |
+| e                            | edit the note in `$VISUAL` or `$EDITOR`                        |
+| d                            | delete the note and its cards                                  |
+| u                            | undo the last edit or deletion                                 |
+| r                            | re-transmit and redraw images                                  |
+| esc                          | back to the deck list when opened from it, otherwise quit      |
+| q                            | quit                                                           |
+| ?                            | list the keys                                                  |
 
 Editing, from here, from the review screen with `e`, or with `yaac edit NOTE_ID --editor`, writes the note to a temporary markdown file and opens the editor on it:
 

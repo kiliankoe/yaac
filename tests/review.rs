@@ -367,3 +367,24 @@ fn long_text_wraps_at_a_readable_width_on_wide_terminals() {
         );
     }
 }
+
+#[test]
+fn space_and_enter_toggle_between_question_and_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    add_basic(&path, "seis", "six");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let mut reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    let revealed = |reviewer: &Reviewer| reviewer.current.as_ref().unwrap().revealed;
+
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char(' '))).unwrap();
+    assert!(revealed(&reviewer));
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char(' '))).unwrap();
+    assert!(!revealed(&reviewer), "space hides the answer again");
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Char('3'))).unwrap();
+    assert_eq!(reviewer.answered, 0, "hidden again, so not answerable");
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Enter)).unwrap();
+    assert!(revealed(&reviewer));
+    review::handle(&mut reviewer, KeyEvent::from(KeyCode::Enter)).unwrap();
+    assert!(!revealed(&reviewer));
+}

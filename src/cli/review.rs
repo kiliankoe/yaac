@@ -8,10 +8,12 @@ use serde::Serialize;
 
 use crate::cli::Context;
 use crate::decks;
+use crate::notes;
 use crate::output;
 use crate::review::Reviewer;
 use crate::session::AnkiResultExt;
 use crate::tui;
+use crate::tui::browse::{self, Browser};
 use crate::tui::decks::{Choice, Picker};
 use crate::tui::images::{self, Images};
 use crate::tui::review::Action;
@@ -72,6 +74,16 @@ pub fn run(ctx: &Context, args: ReviewArgs) -> Result<()> {
             Some(deck) => deck,
             None => match tui::decks::pick(&mut terminal, &mut session, &mut picker)? {
                 Choice::Deck(deck) => deck,
+                Choice::Browse(deck) => {
+                    let name = notes::deck_name(&mut session.col, deck)?;
+                    let mut browser = Browser::new(browse::deck_query(&name));
+                    let exit = browse::run(&mut terminal, &mut session, &mut browser, &mut images)?;
+                    if exit == browse::Exit::Quit {
+                        break;
+                    }
+                    picker.set_rows(decks::rows(&mut session.col)?);
+                    continue;
+                }
                 Choice::Quit => break,
             },
         };

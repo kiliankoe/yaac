@@ -145,6 +145,13 @@ impl<'a> Reviewer<'a> {
         }
     }
 
+    /// Shows the answer, or the question again.
+    pub fn toggle_reveal(&mut self) {
+        if let Some(current) = &mut self.current {
+            current.revealed = !current.revealed;
+        }
+    }
+
     /// Opens the current card's note in the editor and shows the card again with the
     /// new text. Scheduling, the timer, and the revealed side are untouched. None when
     /// there is no card.

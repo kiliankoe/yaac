@@ -24,7 +24,7 @@ pub const GOOD: Color = Color::Green;
 pub const EASY: Color = Color::Blue;
 
 const KEYS: &[(&str, &str)] = &[
-    ("space, enter", "show the answer"),
+    ("space, enter", "show the answer, or the question again"),
     ("1 2 3 4", "Again, Hard, Good, Easy"),
     ("u", "undo the last answer or change"),
     ("s", "suspend the card"),
@@ -109,7 +109,7 @@ pub fn handle(reviewer: &mut Reviewer, key: KeyEvent) -> Result<Action> {
         _ if is_ctrl_c(key) => return Ok(Action::Quit),
         KeyCode::Char('q') => return Ok(Action::Quit),
         KeyCode::Esc => return Ok(Action::Back),
-        KeyCode::Char(' ') | KeyCode::Enter => reviewer.reveal(),
+        KeyCode::Char(' ') | KeyCode::Enter => reviewer.toggle_reveal(),
         KeyCode::Char('1') if revealed => reviewer.answer(Rating::Again)?,
         KeyCode::Char('2') if revealed => reviewer.answer(Rating::Hard)?,
         KeyCode::Char('3') if revealed => reviewer.answer(Rating::Good)?,

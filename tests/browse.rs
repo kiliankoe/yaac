@@ -329,3 +329,78 @@ fn the_detail_pane_wraps_long_fields_at_a_readable_width() {
     }
     session.close().unwrap();
 }
+
+#[test]
+fn d_asks_before_deleting_and_y_deletes_the_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    let carrot = add_basic(&path, "carrot", "vegetable");
+    let apple = add_basic(&path, "apple", "fruit");
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let media = dir.path().join("collection.media");
+    let mut browser = Browser::new("deck:Default");
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.selected().map(|note| note.id), Some(apple));
+
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('d')),
+        BrowseAction::Continue
+    );
+    let lines = screen(&mut browser, 100, 24, &media);
+    assert!(
+        lines[23].contains("delete") && lines[23].contains("apple") && lines[23].contains("y"),
+        "{}",
+        lines[23]
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('n')),
+        BrowseAction::Continue,
+        "anything but y cancels"
+    );
+    let lines = screen(&mut browser, 100, 24, &media);
+    assert!(!lines[23].contains("delete"), "{}", lines[23]);
+    assert_eq!(browser.notes().len(), 2);
+
+    press(&mut browser, KeyCode::Char('d'));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('y')),
+        BrowseAction::Delete(NoteId(apple))
+    );
+    browse::delete(&mut session, &mut browser, NoteId(apple)).unwrap();
+    assert_eq!(browser.notes().len(), 1);
+    assert_eq!(
+        browser.selected().map(|note| note.id),
+        Some(carrot),
+        "the selection moves to the next note"
+    );
+    assert!(yaac::notes::get_note(&mut session.col, NoteId(apple)).is_err());
+    let lines = screen(&mut browser, 100, 24, &media);
+    assert!(lines[23].contains("deleted"), "{}", lines[23]);
+
+    assert_eq!(press(&mut browser, KeyCode::Char('u')), BrowseAction::Undo);
+    session.col.undo().unwrap();
+    browse::search(&mut session, &mut browser).unwrap();
+    assert_eq!(browser.notes().len(), 2, "undo brings the note back");
+
+    // While typing, d is part of the query.
+    press(&mut browser, KeyCode::Char('/'));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('d')),
+        BrowseAction::Search
+    );
+    session.close().unwrap();
+}
+
+#[test]
+fn esc_goes_back_and_q_quits_unless_typing() {
+    let mut browser = Browser::new("deck:*");
+    assert_eq!(press(&mut browser, KeyCode::Esc), BrowseAction::Back);
+    assert_eq!(press(&mut browser, KeyCode::Char('q')), BrowseAction::Quit);
+    press(&mut browser, KeyCode::Char('/'));
+    assert_eq!(
+        press(&mut browser, KeyCode::Esc),
+        BrowseAction::Continue,
+        "esc only leaves the search box"
+    );
+    assert_eq!(press(&mut browser, KeyCode::Esc), BrowseAction::Back);
+}
