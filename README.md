@@ -8,6 +8,8 @@ There's quite a few alternatives to this, I tried several, but nothing quite mat
 
 Full disclosure: This was mostly implemented with the help of agentic coding tools. It is very much what I wanted to have for my needs and it wouldn't exist otherwise. I'm sorry if that's a dealbreaker for you. This readme however is not written by AI, maybe that helps at least.
 
+![screenshot](./media/yaac.png)
+
 ## Installation
 
 ### Nix
