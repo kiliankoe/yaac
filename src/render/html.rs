@@ -195,6 +195,10 @@ struct Element {
     /// Own `text-align`; None inherits from the enclosing block.
     align: Option<Alignment>,
     hidden: bool,
+    /// Shrink-to-fit box: its lines are placed as one column when it closes.
+    shrink: bool,
+    /// Where that column starts in `lines`.
+    line_start: usize,
 }
 
 struct Builder<'s, 'c> {
@@ -374,6 +378,8 @@ impl<'s, 'c> Builder<'s, 'c> {
             style,
             align,
             hidden,
+            shrink: sheet_decl.shrink || inline.shrink,
+            line_start: self.lines.len(),
         });
         if tag == "li" {
             let indent = "  ".repeat(self.list_depth.saturating_sub(1));
@@ -394,11 +400,49 @@ impl<'s, 'c> Builder<'s, 'c> {
         } else {
             self.flush_space();
         }
-        while self.elements.len() > pos {
+        self.unwind(pos);
+    }
+
+    /// Pops elements down to `len`, laying out shrink-to-fit boxes as they close.
+    fn unwind(&mut self, len: usize) {
+        while self.elements.len() > len {
             let closed = self.elements.pop().expect("element to close");
             if closed.tag == "ul" || closed.tag == "ol" {
                 self.list_depth = self.list_depth.saturating_sub(1);
             }
+            if closed.shrink {
+                let outer = self.alignment();
+                self.shrink_to_fit(closed.line_start, outer);
+            }
+        }
+    }
+
+    /// A shrink-to-fit box is only as wide as its widest line, and it is the box, not
+    /// each line, that the surrounding alignment places. The screen aligns one line at a
+    /// time, so the box becomes padding: every line is filled out to the column's width
+    /// and then hands its own alignment over to the one around the box.
+    fn shrink_to_fit(&mut self, start: usize, outer: Option<Alignment>) {
+        let Some(lines) = self.lines.get_mut(start..) else {
+            return;
+        };
+        let width = lines.iter().map(Line::width).max().unwrap_or(0);
+        for line in lines {
+            let inner = line.alignment.or(outer);
+            let pad = width - line.width();
+            if pad > 0 && inner != outer {
+                let (before, after) = match inner {
+                    Some(Alignment::Right) => (pad, 0),
+                    Some(Alignment::Center) => (pad / 2, pad - pad / 2),
+                    _ => (0, pad),
+                };
+                if before > 0 {
+                    line.spans.insert(0, Span::raw(" ".repeat(before)));
+                }
+                if after > 0 {
+                    line.spans.push(Span::raw(" ".repeat(after)));
+                }
+            }
+            line.alignment = outer;
         }
     }
 
@@ -443,6 +487,10 @@ impl<'s, 'c> Builder<'s, 'c> {
             self.blocks
                 .push(Block::Text(std::mem::take(&mut self.lines)));
         }
+        // An image ends the column any open shrink-to-fit box was collecting.
+        for element in &mut self.elements {
+            element.line_start = 0;
+        }
     }
 
     fn rule(&mut self) {
@@ -455,6 +503,7 @@ impl<'s, 'c> Builder<'s, 'c> {
 
     fn finish(mut self) -> Vec<Block> {
         self.newline();
+        self.unwind(1);
         self.flush_text();
         self.blocks
     }
@@ -670,6 +719,45 @@ mod tests {
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn shrink_to_fit_boxes_place_their_lines_as_one_column() {
+        // The trick the overlapping-cloze notetype uses: a left-aligned column that the
+        // enclosing centering places as a whole.
+        let sheet = Stylesheet::parse(".text { display: inline-block; text-align: left }");
+        let lines = html_to_lines(
+            "<div class=\"text\"><div>Venus</div><div>Mercury</div></div>",
+            &sheet,
+        );
+        assert_eq!(
+            lines[0].to_string(),
+            "Venus  ",
+            "filled out to the column width"
+        );
+        assert_eq!(lines[1].to_string(), "Mercury");
+        assert!(
+            lines.iter().all(|line| line.alignment.is_none()),
+            "the column, not the line, decides where the text sits"
+        );
+    }
+
+    #[test]
+    fn a_shrink_to_fit_box_takes_the_alignment_around_it() {
+        let sheet = Stylesheet::parse(
+            ".card { text-align: center } .text { display: inline-block; text-align: left }",
+        );
+        let lines = html_to_lines(
+            "<div class=\"card\"><div class=\"text\"><div>a</div><div>bbb</div></div></div>",
+            &sheet,
+        );
+        assert_eq!(lines[0].to_string(), "a  ");
+        assert_eq!(lines[1].to_string(), "bbb");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.alignment == Some(Alignment::Center))
         );
     }
 

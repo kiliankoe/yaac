@@ -1,7 +1,7 @@
 //! Card stylesheets, reduced to what a terminal can show. Parsing and selector
 //! matching are simplecss's job; this module only interprets the handful of
 //! properties with a terminal equivalent: alignment, weight, slant, decoration,
-//! size, colour, and hiding.
+//! size, colour, hiding, and shrink-to-fit boxes.
 
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
@@ -15,6 +15,8 @@ pub struct Decl {
     pub remove: Modifier,
     pub align: Option<Alignment>,
     pub hidden: bool,
+    /// An inline-level box: as wide as its content instead of as wide as the area.
+    pub shrink: bool,
 }
 
 impl Decl {
@@ -37,6 +39,7 @@ impl Decl {
             self.align = other.align;
         }
         self.hidden |= other.hidden;
+        self.shrink |= other.shrink;
     }
 
     /// Parses `prop: value; prop: value` as found in `style` attributes.
@@ -95,7 +98,14 @@ impl Decl {
                     _ => None,
                 }
             }
-            "display" if value == "none" => self.hidden = true,
+            "display" => match value.as_str() {
+                "none" => self.hidden = true,
+                // `inline-block` and its siblings shrink to fit, so the alignment
+                // around them places the box and their own aligns the text inside it.
+                // Plain `inline` is not a box of its own and stays out of this.
+                other if other.starts_with("inline-") => self.shrink = true,
+                _ => {}
+            },
             "visibility" if value == "hidden" => self.hidden = true,
             _ => {}
         }
@@ -478,5 +488,14 @@ mod tests {
         let decl = Decl::parse("font-weight: bold; text-align: center; font-size: 12px");
         assert!(decl.add.contains(Modifier::BOLD | Modifier::DIM));
         assert_eq!(decl.align, Some(Alignment::Center));
+    }
+
+    #[test]
+    fn only_inline_level_boxes_shrink_to_fit() {
+        assert!(Decl::parse("display: inline-block").shrink);
+        assert!(Decl::parse("display: inline-flex").shrink);
+        assert!(!Decl::parse("display: inline").shrink);
+        assert!(!Decl::parse("display: block").shrink);
+        assert!(Decl::parse("display: none").hidden);
     }
 }

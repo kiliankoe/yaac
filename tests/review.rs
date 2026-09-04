@@ -111,6 +111,45 @@ fn keys_drive_the_reviewer() {
 }
 
 #[test]
+fn a_centered_column_keeps_its_lines_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+    add_basic(
+        &path,
+        "<div style=\"display: inline-block; text-align: left\">\
+         <div>Mercury</div><div>Venus</div></div>",
+        "back",
+    );
+    let mut session = Session::open(Some(&path), &Config::default()).unwrap();
+    let reviewer = Reviewer::start(&mut session.col, DeckId(1)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut images = Images::disabled(dir.path().join("collection.media"));
+
+    terminal
+        .draw(|frame| review::draw(frame, &reviewer, &mut images, None))
+        .unwrap();
+    let screen = rows(terminal.backend().buffer());
+    let column = |word: &str| {
+        screen
+            .iter()
+            .find(|line| line.contains(word))
+            .map(|line| line.find(word).unwrap())
+            .unwrap_or_else(|| panic!("{word} on screen"))
+    };
+    let start = column("Mercury");
+    assert_eq!(
+        start,
+        column("Venus"),
+        "the shorter line follows the column, not its own centering"
+    );
+    let end = start + "Mercury".len();
+    assert!(
+        start.abs_diff(80 - end) <= 2,
+        "the column itself is centered: starts at {start}, ends at {end}"
+    );
+}
+
+#[test]
 fn the_screen_centers_the_card_and_colors_the_answers() {
     let dir = tempfile::tempdir().unwrap();
     let path = fresh_collection(dir.path());
