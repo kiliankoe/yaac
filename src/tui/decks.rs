@@ -21,7 +21,7 @@ use crate::sync::{self, Auth, NormalOutcome};
 use crate::tui::{Terminal, is_ctrl_c, next_key, overlay};
 
 const KEYS: &[(&str, &str)] = &[
-    ("enter", "review the selected deck"),
+    ("enter, space", "review the selected deck"),
     ("a", "add a note to the selected deck"),
     ("A", "add another note of the notetype used last"),
     ("b", "browse the selected deck's notes"),
@@ -169,12 +169,7 @@ impl Picker {
         match key.code {
             KeyCode::Down => self.list.select_next(),
             KeyCode::Up => self.list.select_previous(),
-            KeyCode::Enter => {
-                self.searching = false;
-                if let Some(row) = self.selected() {
-                    return PickerAction::Select(DeckId(row.id));
-                }
-            }
+            KeyCode::Enter => return self.start_review(),
             // Esc dismisses an active filter first, whether or not it is being typed;
             // only an unfiltered list quits.
             KeyCode::Esc if self.searching || !self.filter.is_empty() => {
@@ -195,6 +190,8 @@ impl Picker {
                 }
                 _ => {}
             },
+            // Below the search arm so a space typed into a filter stays text.
+            KeyCode::Char(' ') => return self.start_review(),
             KeyCode::Char('q') => return PickerAction::Quit,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('b') => {
@@ -235,6 +232,14 @@ impl Picker {
             _ => {}
         }
         PickerAction::Continue
+    }
+
+    fn start_review(&mut self) -> PickerAction {
+        self.searching = false;
+        match self.selected() {
+            Some(row) => PickerAction::Select(DeckId(row.id)),
+            None => PickerAction::Continue,
+        }
     }
 
     fn handle_chooser(&mut self, key: KeyEvent) -> PickerAction {

@@ -370,3 +370,21 @@ fn status_line(picker: &mut Picker) -> String {
     let buffer = terminal.backend().buffer();
     (0..60).map(|x| buffer[(x, 9)].symbol()).collect()
 }
+
+#[test]
+fn space_starts_a_review_unless_the_filter_is_being_typed() {
+    let mut picker = Picker::new(rows(), Vec::new());
+    assert_eq!(
+        press(&mut picker, KeyCode::Char(' ')),
+        PickerAction::Select(DeckId(2))
+    );
+
+    press(&mut picker, KeyCode::Char('/'));
+    for c in "spanish ".chars() {
+        assert_eq!(press(&mut picker, KeyCode::Char(c)), PickerAction::Continue);
+    }
+    assert!(
+        picker.visible().is_empty(),
+        "the space went into the filter, and no deck name ends in one"
+    );
+}
