@@ -73,6 +73,11 @@ yaac edit [note-id] --editor
 yaac tag add "todo review" [note-id]
 yaac delete [note-id]
 
+# Make the note's cards completely new again, forget all review history.
+yaac reset [note-id]
+# Move the due date and keep review history, same syntax as Anki: 0 today, 3-7 a random day in that range, 1! also sets the interval.
+yaac due 0 [note-id]
+
 # piping composes nicely with `-` to read from stdin
 yaac search [query] --ids | yaac tag add later -
 

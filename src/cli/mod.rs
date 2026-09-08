@@ -2,11 +2,13 @@ mod add;
 mod browse;
 mod decks;
 mod delete;
+mod due;
 mod edit;
 mod info;
 mod login;
 mod logout;
 mod notetypes;
+mod reset;
 mod review;
 mod search;
 mod show;
@@ -59,6 +61,10 @@ enum Command {
     /// Add or remove tags on notes.
     #[command(subcommand)]
     Tag(tag::TagCommand),
+    /// Make cards new again, the desktop's "Reset" (once "Forget").
+    Reset(reset::ResetArgs),
+    /// Make cards due in a number of days, keeping their history; the desktop's "Set Due Date".
+    Due(due::DueArgs),
     /// Delete notes and their cards.
     Delete(delete::DeleteArgs),
     /// List decks with today's due counts.
@@ -110,6 +116,8 @@ pub fn run() -> ExitCode {
             Command::Show(args) => show::run(&ctx, args),
             Command::Edit(args) => edit::run(&ctx, args),
             Command::Tag(command) => tag::run(&ctx, command),
+            Command::Reset(args) => reset::run(&ctx, args),
+            Command::Due(args) => due::run(&ctx, args),
             Command::Delete(args) => delete::run(&ctx, args),
             Command::Decks => decks::run(&ctx),
             Command::Notetypes => notetypes::run(&ctx),

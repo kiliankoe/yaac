@@ -5,6 +5,7 @@ use std::fmt;
 use std::io::BufRead;
 use std::sync::Arc;
 
+use anki::card::CardId;
 use anki::collection::Collection;
 use anki::decks::DeckId;
 use anki::notes::{Note, NoteId};
@@ -207,6 +208,18 @@ fn view(col: &mut Collection, nid: NoteId, days_elapsed: u32) -> Result<NoteView
         fields,
         cards,
     })
+}
+
+/// Every card of every note, for commands that schedule per card but are addressed by
+/// note. A note that does not exist is an error, not an empty list.
+pub fn card_ids(col: &mut Collection, nids: &[NoteId]) -> Result<Vec<CardId>> {
+    let mut cids = Vec::new();
+    for &nid in nids {
+        get_note(col, nid)?;
+        let cards = col.storage.all_cards_of_note(nid).ctx("reading cards")?;
+        cids.extend(cards.into_iter().map(|card| card.id()));
+    }
+    Ok(cids)
 }
 
 pub fn get_note(col: &mut Collection, nid: NoteId) -> Result<Note> {
