@@ -67,8 +67,8 @@ enum Command {
     Due(due::DueArgs),
     /// Delete notes and their cards.
     Delete(delete::DeleteArgs),
-    /// List decks with today's due counts.
-    Decks,
+    /// List decks with today's due counts, or create one.
+    Decks(decks::DecksArgs),
     /// List notetypes with their fields and card templates.
     Notetypes,
     /// Show the statistics the desktop's stats screen shows.
@@ -119,7 +119,7 @@ pub fn run() -> ExitCode {
             Command::Reset(args) => reset::run(&ctx, args),
             Command::Due(args) => due::run(&ctx, args),
             Command::Delete(args) => delete::run(&ctx, args),
-            Command::Decks => decks::run(&ctx),
+            Command::Decks(args) => decks::run(&ctx, args),
             Command::Notetypes => notetypes::run(&ctx),
             Command::Stats(args) => stats::run(&ctx, args),
             Command::Login(args) => login::run(&ctx, args),

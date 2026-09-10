@@ -18,7 +18,8 @@ pub struct AddArgs {
     #[arg(long, short = 'n', value_name = "NAME")]
     notetype: Option<String>,
 
-    /// Deck name; falls back to default_deck in the config. Decks are never created.
+    /// Deck name; falls back to default_deck in the config. Adding never creates a
+    /// deck, `yaac decks create` does.
     #[arg(long, short = 'd', value_name = "NAME")]
     deck: Option<String>,
 

@@ -64,6 +64,10 @@ yaac search tag:todo --ids
 # all note details, can also read from stdin
 yaac show [note-id]
 
+# Decks, `create` also makes any missing parents of a nested name
+yaac decks
+yaac decks create Spanish::Verbs
+
 # Managing notes
 yaac add -n Basic -d Spanish -t vocab Front="el gato/la gata" Back="cat"
 yaac add -n Basic -d Spanish "bare values" "in field order"

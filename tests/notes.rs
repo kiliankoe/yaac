@@ -545,3 +545,81 @@ fn lists_and_show_print_formulas_as_unicode() {
         "the JSON fields stay as stored"
     );
 }
+
+#[test]
+fn decks_create_makes_a_deck_and_its_parents() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+
+    let output = yaac_on(&path)
+        .args(["decks", "create", "Spanish::Verbs", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let created = json(&output);
+    assert_eq!(created["name"], "Spanish::Verbs");
+    assert!(created["id"].as_i64().unwrap() > 1);
+
+    let output = yaac_on(&path)
+        .args(["decks", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let names: Vec<String> = json(&output)
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|deck| deck["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"Spanish".to_string()), "parent created too");
+    assert!(names.contains(&"Spanish::Verbs".to_string()));
+
+    yaac_on(&path)
+        .args([
+            "add",
+            "-n",
+            "Basic",
+            "-d",
+            "Spanish::Verbs",
+            "hablar",
+            "to speak",
+        ])
+        .assert()
+        .success();
+
+    yaac_on(&path)
+        .args(["decks", "create", "Spanish::Nouns"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "created deck \"Spanish::Nouns\"\n",
+        ));
+    yaac_on(&path)
+        .arg("decks")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("  Nouns"))
+        .stdout(predicate::str::contains("  Verbs"));
+}
+
+#[test]
+fn decks_create_refuses_a_name_that_is_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fresh_collection(dir.path());
+
+    yaac_on(&path)
+        .args(["decks", "create", "Default"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+
+    yaac_on(&path)
+        .args(["decks", "create", "  "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty"));
+}

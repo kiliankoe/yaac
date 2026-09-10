@@ -289,7 +289,9 @@ pub fn resolve_deck(col: &mut Collection, name: Option<&str>, config: &Config) -
     };
     col.get_deck_id(name)
         .ctx("looking up deck")?
-        .with_context(|| format!("deck {name:?} does not exist; see `yaac decks`"))
+        .with_context(|| {
+            format!("deck {name:?} does not exist; create it with `yaac decks create {name:?}`")
+        })
 }
 
 /// What Anki's pre-add checks found, short of an error.
