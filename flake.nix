@@ -67,8 +67,17 @@
           postPatch = ''
             cp ${ankiSrc}/.version "$cargoDepsCopy/.version"
           '';
-          # Anki's rslib generates protobuf code at build time.
-          nativeBuildInputs = [ pkgs.protobuf ];
+          # Anki's rslib generates protobuf code at build time. nixpkgs' cargo setup
+          # hook makes the sqlite and zstd crates link the system libraries through
+          # pkg-config instead of their vendored copies.
+          nativeBuildInputs = [
+            pkgs.protobuf
+            pkgs.pkg-config
+          ];
+          buildInputs = [
+            pkgs.sqlite
+            pkgs.zstd
+          ];
           PROTOC = "${pkgs.protobuf}/bin/protoc";
           # The tests build throwaway collections through rslib and take a while;
           # `cargo test` runs them locally.
